@@ -453,6 +453,59 @@ sys.exit(result.returncode)
 """
 
 
+CURSOR_CLI_LOOP_PY = r"""
+import os, subprocess, sys, time
+from pathlib import Path
+
+goal = os.environ.get('LOOPX_GOAL_ID', '').strip()
+agent = os.environ.get('LOOPX_AGENT_ID', '').strip()
+project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
+
+if not goal or not agent:
+    print(
+        '\n[LoopX cursor-cli loop]\nmissing LOOPX_GOAL_ID or LOOPX_AGENT_ID\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+
+tick_worker = os.environ.get(
+    'LOOPX_CURSOR_TICK_WORKER',
+    str(Path.home() / '.cursor' / 'bin' / 'loopx-cursor-cli-tick-worker'),
+)
+tick_interval = int(os.environ.get('LOOPX_CURSOR_TICK_INTERVAL', '10'))
+pause_interval = int(os.environ.get('LOOPX_CURSOR_PAUSE_INTERVAL', '30'))
+max_ticks = int(os.environ.get('LOOPX_CURSOR_MAX_TICKS', '0')) or None
+
+print(
+    f'\n[LoopX cursor-cli loop] starting — goal={goal} agent={agent}'
+    f' tick_interval={tick_interval}s pause_interval={pause_interval}s'
+    f' max_ticks={max_ticks or "unlimited"}\n',
+    flush=True,
+)
+
+tick_count = 0
+while True:
+    result = subprocess.run([tick_worker], env=os.environ.copy())
+    if result.returncode == 0:
+        tick_count += 1
+        print(f'\n[LoopX cursor-cli loop] tick {tick_count} done; sleeping {tick_interval}s\n', flush=True)
+        if max_ticks and tick_count >= max_ticks:
+            print(f'\n[LoopX cursor-cli loop] reached max_ticks={max_ticks}; stopping.\n', flush=True)
+            raise SystemExit(0)
+        time.sleep(tick_interval)
+    elif result.returncode == 2:
+        print(f'\n[LoopX cursor-cli loop] tick worker exited with 2 (config error); stopping.\n', flush=True)
+        raise SystemExit(2)
+    else:
+        print(
+            f'\n[LoopX cursor-cli loop] tick worker exited {result.returncode} '
+            f'(quota paused or error); sleeping {pause_interval}s before retry.\n',
+            flush=True,
+        )
+        time.sleep(pause_interval)
+"""
+
+
 CODEX_TUI_EXEC_PY = r"""
 import json
 import os
