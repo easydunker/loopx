@@ -568,7 +568,7 @@ def install_slash_commands(
             tick_worker_status = _retire_status(tick_worker_path, execute=execute)
         else:
             tick_worker_status = _target_status(tick_worker_path, tick_worker_content, execute=execute)
-            if execute and tick_worker_status in ("written", "ok"):
+            if execute and tick_worker_status in ("created", "updated", "upgraded_legacy_managed"):
                 tick_worker_path.chmod(0o755)
         installed.append(
             {
