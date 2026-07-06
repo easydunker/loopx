@@ -374,6 +374,9 @@ from pathlib import Path
 loopx = os.environ.get('LOOPX_PANE_LOOPX') or str(
     Path(os.environ.get('LOOPX_PROJECT', '.')).expanduser() / '.local' / 'bin' / 'loopx'
 )
+if not Path(loopx).exists():
+    import shutil
+    loopx = shutil.which('loopx') or loopx
 goal = os.environ.get('LOOPX_GOAL_ID', '').strip()
 agent = os.environ.get('LOOPX_AGENT_ID', '').strip()
 role = (
@@ -386,10 +389,26 @@ cursor_agent_bin = os.environ.get('LOOPX_CURSOR_AGENT_BIN', 'cursor-agent')
 
 if not goal or not agent:
     print(
-        '\n[LoopX cursor-cli tick worker]\nmissing LOOPX_GOAL_ID or LOOPX_AGENT_ID\n',
+        '\n[LoopX cursor-cli tick]\nmissing LOOPX_GOAL_ID or LOOPX_AGENT_ID\n',
         flush=True,
     )
     raise SystemExit(2)
+
+print(f'\n[LoopX cursor-cli tick] goal={goal} agent={agent}\n', flush=True)
+
+# Quota gate — the same loopx quota should-run seam used by all LoopX agents.
+# This makes the tick self-contained: run loopx-cursor-cli-tick-worker directly;
+# no dependency on $LOOPX_PANE_A2A_TICK being provisioned.
+quota_result = subprocess.run(
+    [loopx, '--format', 'markdown', 'quota', 'should-run',
+     '--goal-id', goal, '--agent-id', agent],
+)
+if quota_result.returncode != 0:
+    print(
+        '\n[LoopX cursor-cli tick] quota should-run=false; paused — no cursor-agent invocation.\n',
+        flush=True,
+    )
+    raise SystemExit(0)
 
 context_lines = [
     f'- goal_id: {goal}',
@@ -406,8 +425,7 @@ prompt = '\n'.join(
         *context_lines,
         '',
         '## Tick Protocol',
-        'The quota gate has already passed (you were invoked because `loopx quota should-run`',
-        'returned true). Do one bounded delivery segment, then stop.',
+        'The quota gate has already passed. Do one bounded delivery segment, then stop.',
         '',
         '## Step 1 — Read your current task',
         'Shell out to understand your current frontier:',
@@ -431,11 +449,6 @@ prompt = '\n'.join(
         '- Do not mark claim_allowed until role-authored public-safe evidence validates.',
         '- successor_rule: create only role-declared successor todos through LoopX todo commands.',
     ]
-)
-
-print(
-    f'\n[LoopX cursor-cli tick worker] goal={goal} agent={agent}\n',
-    flush=True,
 )
 
 result = subprocess.run(

@@ -285,28 +285,28 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
                     "## External tick driver (LoopX-owned loop)",
                     "",
                     "Cursor CLI has no native loop runtime. LoopX owns the external tick driver.",
-                    "After installing this surface, set up each project as follows:",
+                    "The tick worker is self-contained: it gates via `loopx quota should-run`,",
+                    "then builds the per-tick prompt and invokes `cursor-agent -p`.",
+                    "",
+                    "After installing this surface, run one tick as follows:",
                     "",
                     "```bash",
-                    "# 1. Set env vars for goal and agent (per project):",
+                    "# Set env vars for goal and agent (per project):",
                     "export LOOPX_GOAL_ID=<goal_id>",
                     "export LOOPX_AGENT_ID=<agent_id>",
                     "export LOOPX_PROJECT=$(pwd)",
                     "",
-                    "# 2. Point the pane tick at the cursor-cli worker:",
-                    "export LOOPX_PANE_WORKER_TURN=~/.cursor/bin/loopx-cursor-cli-tick-worker",
-                    "",
-                    "# 3. Run one tick (gate + cursor-agent invocation):",
-                    "$LOOPX_PANE_A2A_TICK",
+                    "# Run one tick (quota gate + cursor-agent invocation):",
+                    "~/.cursor/bin/loopx-cursor-cli-tick-worker",
                     "```",
                     "",
-                    "The tick driver (`loopx-pane-a2a-tick`) gates each invocation through",
-                    "`loopx quota should-run`; when quota allows, it runs `loopx-cursor-cli-tick-worker`,",
-                    "which builds the per-tick prompt and invokes `cursor-agent -p`.",
+                    "The tick worker is written to `~/.cursor/bin/loopx-cursor-cli-tick-worker`",
+                    "by `loopx slash-commands --install --surface cursor`. Add `~/.cursor/bin`",
+                    "to PATH or invoke by full path.",
                     "",
-                    "The tick worker script is written to `~/.cursor/bin/loopx-cursor-cli-tick-worker`",
-                    "by `loopx slash-commands --install --surface cursor`. Add `~/.cursor/bin` to PATH",
-                    "or use the full path in `LOOPX_PANE_WORKER_TURN`.",
+                    "If the LoopX multi-agent launcher has already provisioned `$LOOPX_PANE_A2A_TICK`,",
+                    "you can also use it with `LOOPX_PANE_WORKER_TURN=~/.cursor/bin/loopx-cursor-cli-tick-worker`",
+                    "— the quota gate in the worker is idempotent.",
                 ]
             ),
             "\n".join(
@@ -563,12 +563,16 @@ def install_slash_commands(
 
         bin_dir = cursor_root / "bin"
         tick_worker_path = bin_dir / "loopx-cursor-cli-tick-worker"
-        tick_worker_content = "#!/usr/bin/env python3\n" + CURSOR_CLI_TICK_WORKER_PY.lstrip("\n")
+        tick_worker_content = (
+            "#!/usr/bin/env python3\n"
+            f"# {_managed_marker(command='loopx-cursor-cli-tick-worker', surface='cursor')}\n"
+            + CURSOR_CLI_TICK_WORKER_PY.lstrip("\n")
+        )
         if uninstall:
             tick_worker_status = _retire_status(tick_worker_path, execute=execute)
         else:
             tick_worker_status = _target_status(tick_worker_path, tick_worker_content, execute=execute)
-            if execute and tick_worker_status in ("created", "updated", "upgraded_legacy_managed"):
+            if execute and tick_worker_status in ("created", "updated", "upgraded_legacy_managed", "unchanged"):
                 tick_worker_path.chmod(0o755)
         installed.append(
             {

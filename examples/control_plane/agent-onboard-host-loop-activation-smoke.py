@@ -60,13 +60,12 @@ def main() -> int:
 
     # Phase 3: tick driver contract is exposed in the activation packet
     tick_driver = cursor_cli.get("tick_driver", {})
-    assert tick_driver.get("seam") == "loopx_pane_a2a_tick", tick_driver
-    assert tick_driver.get("worker_env_var") == "LOOPX_PANE_WORKER_TURN", tick_driver
-    assert "loopx-cursor-cli-tick-worker" in tick_driver.get("worker_script", ""), tick_driver
-    assert "$LOOPX_PANE_A2A_TICK" in tick_driver.get("tick_invocation", ""), tick_driver
+    assert tick_driver.get("seam") == "loopx_cli_quota_should_run", tick_driver
+    assert "loopx-cursor-cli-tick-worker" in tick_driver.get("tick_script", ""), tick_driver
+    assert "loopx-cursor-cli-tick-worker" in tick_driver.get("tick_invocation", ""), tick_driver
 
     # Phase 3: CURSOR_CLI_TICK_WORKER_PY contains the correct cursor-agent argv shape
-    # (no real cursor-agent invocation — just script content check)
+    # and the self-contained quota gate — no real cursor-agent invocation here.
     assert "cursor-agent" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must reference cursor-agent"
     assert "'-p'" in CURSOR_CLI_TICK_WORKER_PY or '"-p"' in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must pass -p flag to cursor-agent"
@@ -76,8 +75,11 @@ def main() -> int:
     )
     assert "LOOPX_GOAL_ID" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must read LOOPX_GOAL_ID"
     assert "LOOPX_AGENT_ID" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must read LOOPX_AGENT_ID"
+    assert "quota" in CURSOR_CLI_TICK_WORKER_PY and "should-run" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must embed the quota should-run gate"
+    )
 
-    # Phase 3: slash-commands --install --surface cursor now also exposes cursor_tick_worker path
+    # Phase 3: slash-commands --install --surface cursor exposes cursor_tick_worker path
     install_dry = install_slash_commands(execute=False, surfaces=["cursor"])
     assert install_dry["ok"] is True, install_dry
     tick_worker_summary = install_dry["summary"].get("cursor_tick_worker")
