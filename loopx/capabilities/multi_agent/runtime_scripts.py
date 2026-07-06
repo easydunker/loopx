@@ -367,6 +367,85 @@ tick_target.chmod(0o700)
 """
 
 
+CURSOR_CLI_TICK_WORKER_PY = r"""
+import json, os, subprocess, sys
+from pathlib import Path
+
+loopx = os.environ.get('LOOPX_PANE_LOOPX') or str(
+    Path(os.environ.get('LOOPX_PROJECT', '.')).expanduser() / '.local' / 'bin' / 'loopx'
+)
+goal = os.environ.get('LOOPX_GOAL_ID', '').strip()
+agent = os.environ.get('LOOPX_AGENT_ID', '').strip()
+role = (
+    os.environ.get('LOOPX_ROLE_ID', '').strip()
+    or os.environ.get('LOOPX_LANE_ID', '').strip()
+    or agent
+)
+project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
+cursor_agent_bin = os.environ.get('LOOPX_CURSOR_AGENT_BIN', 'cursor-agent')
+
+if not goal or not agent:
+    print(
+        '\n[LoopX cursor-cli tick worker]\nmissing LOOPX_GOAL_ID or LOOPX_AGENT_ID\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+
+context_lines = [
+    f'- goal_id: {goal}',
+    f'- agent_id: {agent}',
+]
+if role and role != agent:
+    context_lines.append(f'- role_id: {role}')
+
+prompt = '\n'.join(
+    [
+        'You are running one tick of the LoopX external loop driver for cursor-cli.',
+        '',
+        '## LoopX Context',
+        *context_lines,
+        '',
+        '## Tick Protocol',
+        'The quota gate has already passed (you were invoked because `loopx quota should-run`',
+        'returned true). Do one bounded delivery segment, then stop.',
+        '',
+        '## Step 1 — Read your current task',
+        'Shell out to understand your current frontier:',
+        f'  {loopx} auto-research frontier --goal-id {goal} --agent-id {agent}',
+        'or list open todos:',
+        f'  {loopx} todo list --goal-id {goal} --agent-id {agent}',
+        '',
+        '## Step 2 — Do one bounded delivery segment',
+        'Read the selected todo. Do real, public-safe work. Stay within your editable scope.',
+        '',
+        '## Step 3 — Writeback',
+        'After completing work on a todo:',
+        f'  {loopx} todo complete --todo-id <todo_id>',
+        f'  {loopx} quota spend-slot --goal-id {goal} --agent-id {agent}',
+        '',
+        'Only spend a slot on validated, bounded completion — not on partial progress.',
+        '',
+        '## Safety Contract',
+        '- Do not edit protected evaluator data, credentials, or private material.',
+        '- Write only public-safe evidence; no raw logs or private artifacts.',
+        '- Do not mark claim_allowed until role-authored public-safe evidence validates.',
+        '- successor_rule: create only role-declared successor todos through LoopX todo commands.',
+    ]
+)
+
+print(
+    f'\n[LoopX cursor-cli tick worker] goal={goal} agent={agent}\n',
+    flush=True,
+)
+
+result = subprocess.run(
+    [cursor_agent_bin, '-p', prompt, '--output-format', 'json'],
+    cwd=project,
+)
+sys.exit(result.returncode)
+"""
+
+
 CODEX_TUI_EXEC_PY = r"""
 import json
 import os

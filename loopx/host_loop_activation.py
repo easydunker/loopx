@@ -344,6 +344,20 @@ def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, 
         "native_goal_api_present": False,
         "native_loop_runtime_present": False,
         "control_plane": "loopx_cli_subcommands",
+        "tick_driver": {
+            "seam": "loopx_pane_a2a_tick",
+            "worker_env_var": "LOOPX_PANE_WORKER_TURN",
+            "worker_script": "~/.cursor/bin/loopx-cursor-cli-tick-worker",
+            "worker_installed_by": f"{cli_bin} slash-commands --install --surface cursor",
+            "tick_invocation": "$LOOPX_PANE_A2A_TICK",
+            "note": (
+                "Reuses the existing loopx-pane-a2a-tick seam. "
+                "Set LOOPX_PANE_WORKER_TURN=~/.cursor/bin/loopx-cursor-cli-tick-worker "
+                "before invoking $LOOPX_PANE_A2A_TICK. The worker builds the per-tick "
+                "prompt and invokes cursor-agent -p; the outer tick gates via "
+                "loopx quota should-run."
+            ),
+        },
         "host_mutation": {
             "owner": "Cursor CLI",
             "host_command": "cursor-agent -p <task_body>",
@@ -356,14 +370,15 @@ def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, 
         },
         "activation_steps": [
             "Install or refresh the Cursor CLI LoopX surface: `loopx slash-commands --install --surface cursor`.",
-            "Run the heartbeat-prompt JSON command after project state and todos are written.",
-            "Read task_body from the JSON payload.",
-            "Start the LoopX-owned external tick driver; it gates each invocation through `loopx quota should-run`.",
-            "The tick driver invokes `cursor-agent -p <task_body>` per allowed tick.",
+            "This writes ~/.cursor/rules/loopx.mdc (tick protocol) and ~/.cursor/bin/loopx-cursor-cli-tick-worker (tick worker).",
+            "Set env: export LOOPX_GOAL_ID=<id> LOOPX_AGENT_ID=<id> LOOPX_PROJECT=$(pwd)",
+            "Set worker: export LOOPX_PANE_WORKER_TURN=~/.cursor/bin/loopx-cursor-cli-tick-worker",
+            "Run one tick: $LOOPX_PANE_A2A_TICK  (gates via loopx quota should-run, then invokes cursor-agent -p)",
             "Auto-approval flags (--force / --approve-mcps) are opt-in with an explicit safety warning; do not set them by default.",
         ],
         "success_criteria": [
-            "The LoopX-owned external tick driver is running for this goal.",
+            "The LoopX-owned external tick driver (loopx-pane-a2a-tick) is running for this goal.",
+            "LOOPX_PANE_WORKER_TURN points to loopx-cursor-cli-tick-worker.",
             "Each tick starts from `loopx quota should-run` before invoking cursor-agent.",
             "Writeback uses `loopx todo complete` and `loopx quota spend-slot` after validated delivery.",
         ],

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .slash_commands import build_slash_command_catalog
+from .capabilities.multi_agent.runtime_scripts import CURSOR_CLI_TICK_WORKER_PY
 
 
 SCHEMA_VERSION = "loopx_slash_command_install_v0"
@@ -281,6 +282,35 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
             ),
             "\n".join(
                 [
+                    "## External tick driver (LoopX-owned loop)",
+                    "",
+                    "Cursor CLI has no native loop runtime. LoopX owns the external tick driver.",
+                    "After installing this surface, set up each project as follows:",
+                    "",
+                    "```bash",
+                    "# 1. Set env vars for goal and agent (per project):",
+                    "export LOOPX_GOAL_ID=<goal_id>",
+                    "export LOOPX_AGENT_ID=<agent_id>",
+                    "export LOOPX_PROJECT=$(pwd)",
+                    "",
+                    "# 2. Point the pane tick at the cursor-cli worker:",
+                    "export LOOPX_PANE_WORKER_TURN=~/.cursor/bin/loopx-cursor-cli-tick-worker",
+                    "",
+                    "# 3. Run one tick (gate + cursor-agent invocation):",
+                    "$LOOPX_PANE_A2A_TICK",
+                    "```",
+                    "",
+                    "The tick driver (`loopx-pane-a2a-tick`) gates each invocation through",
+                    "`loopx quota should-run`; when quota allows, it runs `loopx-cursor-cli-tick-worker`,",
+                    "which builds the per-tick prompt and invokes `cursor-agent -p`.",
+                    "",
+                    "The tick worker script is written to `~/.cursor/bin/loopx-cursor-cli-tick-worker`",
+                    "by `loopx slash-commands --install --surface cursor`. Add `~/.cursor/bin` to PATH",
+                    "or use the full path in `LOOPX_PANE_WORKER_TURN`.",
+                ]
+            ),
+            "\n".join(
+                [
                     "## Auto-approval flags (opt-in, not default)",
                     "",
                     "`cursor-agent` flags `--force`, `--yolo`, and `--approve-mcps` grant unsandboxed "
@@ -531,6 +561,32 @@ def install_slash_commands(
             }
         )
 
+        bin_dir = cursor_root / "bin"
+        tick_worker_path = bin_dir / "loopx-cursor-cli-tick-worker"
+        tick_worker_content = "#!/usr/bin/env python3\n" + CURSOR_CLI_TICK_WORKER_PY.lstrip("\n")
+        if uninstall:
+            tick_worker_status = _retire_status(tick_worker_path, execute=execute)
+        else:
+            tick_worker_status = _target_status(tick_worker_path, tick_worker_content, execute=execute)
+            if execute and tick_worker_status in ("written", "ok"):
+                tick_worker_path.chmod(0o755)
+        installed.append(
+            {
+                "surface": "cursor",
+                "host_surfaces": ["cursor-cli"],
+                "mechanism": "cursor_cli_tick_worker_script",
+                "command": "loopx-cursor-cli-tick-worker",
+                "path": str(tick_worker_path),
+                "status": tick_worker_status,
+                "invoke_as": [str(tick_worker_path)],
+                "note": (
+                    "Cursor CLI tick worker: builds the per-tick prompt and invokes cursor-agent -p. "
+                    "Set LOOPX_PANE_WORKER_TURN to this path (or add ~/.cursor/bin to PATH) "
+                    "before running loopx-pane-a2a-tick."
+                ),
+            }
+        )
+
     status_counts: dict[str, int] = {}
     for item in installed:
         status = str(item["status"])
@@ -552,6 +608,7 @@ def install_slash_commands(
             "codex_skill_dir": str(codex_root / "skills") if "codex" in effective_surfaces else None,
             "claude_skill_dir": str(claude_root / "skills") if "claude-code" in effective_surfaces else None,
             "cursor_rule_dir": str(cursor_root / "rules") if "cursor" in effective_surfaces else None,
+            "cursor_tick_worker": str(cursor_root / "bin" / "loopx-cursor-cli-tick-worker") if "cursor" in effective_surfaces else None,
             "status_counts": status_counts,
             "skip_policy": (
                 "Uninstall removes only LoopX-managed files; user files without a LoopX managed marker are preserved"
@@ -584,6 +641,7 @@ def render_slash_command_install_markdown(payload: dict[str, Any]) -> str:
     codex_skill_dir = payload.get("summary", {}).get("codex_skill_dir")
     claude_skill_dir = payload.get("summary", {}).get("claude_skill_dir")
     cursor_rule_dir = payload.get("summary", {}).get("cursor_rule_dir")
+    cursor_tick_worker = payload.get("summary", {}).get("cursor_tick_worker")
     if codex_prompt_dir:
         lines.append(f"- codex prompts: `{codex_prompt_dir}`")
     if codex_skill_dir:
@@ -592,6 +650,8 @@ def render_slash_command_install_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- claude skills: `{claude_skill_dir}`")
     if cursor_rule_dir:
         lines.append(f"- cursor rules: `{cursor_rule_dir}`")
+    if cursor_tick_worker:
+        lines.append(f"- cursor tick worker: `{cursor_tick_worker}`")
     counts = payload.get("summary", {}).get("status_counts") or {}
     if isinstance(counts, dict) and counts:
         count_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))

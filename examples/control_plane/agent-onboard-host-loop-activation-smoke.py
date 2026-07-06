@@ -15,11 +15,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.bootstrap_command_pack import build_loopx_bootstrap_command_pack  # noqa: E402
+from loopx.capabilities.multi_agent.runtime_scripts import CURSOR_CLI_TICK_WORKER_PY  # noqa: E402
 from loopx.host_loop_activation import (  # noqa: E402
     agent_type_for_host_surface,
     build_agent_type_catalog,
     build_host_loop_activation_packet,
 )
+from loopx.slash_command_install import install_slash_commands  # noqa: E402
 
 
 def run_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -55,6 +57,38 @@ def main() -> int:
     assert cursor_cli["native_loop_runtime_present"] is False, cursor_cli
     assert cursor_cli["native_goal_api_present"] is False, cursor_cli
     assert cursor_cli["control_plane"] == "loopx_cli_subcommands", cursor_cli
+
+    # Phase 3: tick driver contract is exposed in the activation packet
+    tick_driver = cursor_cli.get("tick_driver", {})
+    assert tick_driver.get("seam") == "loopx_pane_a2a_tick", tick_driver
+    assert tick_driver.get("worker_env_var") == "LOOPX_PANE_WORKER_TURN", tick_driver
+    assert "loopx-cursor-cli-tick-worker" in tick_driver.get("worker_script", ""), tick_driver
+    assert "$LOOPX_PANE_A2A_TICK" in tick_driver.get("tick_invocation", ""), tick_driver
+
+    # Phase 3: CURSOR_CLI_TICK_WORKER_PY contains the correct cursor-agent argv shape
+    # (no real cursor-agent invocation — just script content check)
+    assert "cursor-agent" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must reference cursor-agent"
+    assert "'-p'" in CURSOR_CLI_TICK_WORKER_PY or '"-p"' in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must pass -p flag to cursor-agent"
+    )
+    assert "'--output-format'" in CURSOR_CLI_TICK_WORKER_PY or '"--output-format"' in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must pass --output-format to cursor-agent"
+    )
+    assert "LOOPX_GOAL_ID" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must read LOOPX_GOAL_ID"
+    assert "LOOPX_AGENT_ID" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must read LOOPX_AGENT_ID"
+
+    # Phase 3: slash-commands --install --surface cursor now also exposes cursor_tick_worker path
+    install_dry = install_slash_commands(execute=False, surfaces=["cursor"])
+    assert install_dry["ok"] is True, install_dry
+    tick_worker_summary = install_dry["summary"].get("cursor_tick_worker")
+    assert tick_worker_summary is not None, "cursor_tick_worker must be in install summary"
+    assert "loopx-cursor-cli-tick-worker" in tick_worker_summary, tick_worker_summary
+    tick_worker_items = [
+        item for item in install_dry.get("installed", [])
+        if item.get("mechanism") == "cursor_cli_tick_worker_script"
+    ]
+    assert len(tick_worker_items) == 1, f"expected 1 tick worker install item, got {tick_worker_items}"
+    assert tick_worker_items[0].get("status") in ("would_create", "created", "updated", "unchanged"), tick_worker_items[0]
 
     # "cursor" is an accepted alias, not an ambiguous input — resolves unambiguously to cursor-cli
     cursor_alias = build_host_loop_activation_packet(agent_type="cursor", goal_id="demo")
