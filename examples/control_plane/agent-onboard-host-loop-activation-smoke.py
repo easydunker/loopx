@@ -64,8 +64,7 @@ def main() -> int:
     assert "loopx-cursor-cli-tick-worker" in tick_driver.get("tick_script", ""), tick_driver
     assert "loopx-cursor-cli-tick-worker" in tick_driver.get("tick_invocation", ""), tick_driver
 
-    # Phase 3: CURSOR_CLI_TICK_WORKER_PY contains the correct cursor-agent argv shape
-    # and the self-contained quota gate — no real cursor-agent invocation here.
+    # Phase 3: CURSOR_CLI_TICK_WORKER_PY contract assertions (no real cursor-agent invocation)
     assert "cursor-agent" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must reference cursor-agent"
     assert "'-p'" in CURSOR_CLI_TICK_WORKER_PY or '"-p"' in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must pass -p flag to cursor-agent"
@@ -77,6 +76,12 @@ def main() -> int:
     assert "LOOPX_AGENT_ID" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must read LOOPX_AGENT_ID"
     assert "quota" in CURSOR_CLI_TICK_WORKER_PY and "should-run" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must embed the quota should-run gate"
+    )
+    assert "heartbeat-prompt" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must use heartbeat-prompt as the adaptive prompt source"
+    )
+    assert "task_body" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must extract task_body from heartbeat-prompt response"
     )
     assert "LOOPX_CURSOR_MODEL" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must read LOOPX_CURSOR_MODEL"
     assert "'--model'" in CURSOR_CLI_TICK_WORKER_PY or '"--model"' in CURSOR_CLI_TICK_WORKER_PY, (

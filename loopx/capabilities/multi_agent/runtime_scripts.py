@@ -408,8 +408,6 @@ if not goal or not agent:
 print(f'\n[LoopX cursor-cli tick] goal={goal} agent={agent}\n', flush=True)
 
 # Quota gate — the same loopx quota should-run seam used by all LoopX agents.
-# This makes the tick self-contained: run loopx-cursor-cli-tick-worker directly;
-# no dependency on $LOOPX_PANE_A2A_TICK being provisioned.
 quota_result = subprocess.run(
     [loopx, '--format', 'markdown', 'quota', 'should-run',
      '--goal-id', goal, '--agent-id', agent],
@@ -421,49 +419,34 @@ if quota_result.returncode != 0:
     )
     raise SystemExit(0)
 
-context_lines = [
-    f'- goal_id: {goal}',
-    f'- agent_id: {agent}',
-]
-if role and role != agent:
-    context_lines.append(f'- role_id: {role}')
-
-prompt = '\n'.join(
-    [
-        'You are running one tick of the LoopX external loop driver for cursor-cli.',
-        '',
-        '## LoopX Context',
-        *context_lines,
-        '',
-        '## Tick Protocol',
-        'The quota gate has already passed. Do one bounded delivery segment, then stop.',
-        '',
-        '## Step 1 — Read your current task',
-        'Shell out to understand your current frontier:',
-        f'  {loopx} auto-research frontier --goal-id {goal} --agent-id {agent}',
-        'or list open todos:',
-        f'  {loopx} todo list --goal-id {goal} --agent-id {agent}',
-        '',
-        '## Step 2 — Do one bounded delivery segment',
-        'Read the selected todo. Do real, public-safe work. Stay within your editable scope.',
-        '',
-        '## Step 3 — Writeback',
-        'After completing work on a todo:',
-        f'  {loopx} todo complete --todo-id <todo_id>',
-        f'  {loopx} quota spend-slot --goal-id {goal} --agent-id {agent}',
-        '',
-        'Only spend a slot on validated, bounded completion — not on partial progress.',
-        '',
-        '## Safety Contract',
-        '- Do not edit protected evaluator data, credentials, or private material.',
-        '- Write only public-safe evidence; no raw logs or private artifacts.',
-        '- Do not mark claim_allowed until role-authored public-safe evidence validates.',
-        '- successor_rule: create only role-declared successor todos through LoopX todo commands.',
-    ]
+# Build the tick prompt from heartbeat-prompt, same as Codex.
+# heartbeat-prompt is adaptive: when no todos exist it emits goal-start
+# instructions (write todos, then execute); when todos exist it emits
+# execution instructions. This gives cursor-cli the same unified
+# planning + execution behaviour as the Codex TUI goal session.
+agent_arg = ['--agent-id', agent] if agent else []
+hp = subprocess.run(
+    [loopx, '--format', 'json', 'heartbeat-prompt', '--thin',
+     '--goal-id', goal, *agent_arg],
+    capture_output=True, text=True,
 )
+try:
+    hp_payload = json.loads(hp.stdout)
+except Exception:
+    hp_payload = {}
+
+task_body = hp_payload.get('task_body') if isinstance(hp_payload, dict) else None
+if not task_body:
+    error = hp_payload.get('error', '') if isinstance(hp_payload, dict) else ''
+    print(
+        f'\n[LoopX cursor-cli tick] heartbeat-prompt returned no task_body'
+        f'{": " + error if error else ""}; cannot build tick prompt.\n',
+        flush=True,
+    )
+    raise SystemExit(1)
 
 result = subprocess.run(
-    [cursor_agent_bin, '-p', prompt, '--model', cursor_model, '--output-format', 'json'],
+    [cursor_agent_bin, '-p', task_body, '--model', cursor_model, '--output-format', 'json'],
     cwd=project,
 )
 sys.exit(result.returncode)

@@ -359,10 +359,11 @@ def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, 
                 "Run cursor-agent --list-models for available options."
             ),
             "note": (
-                "Self-contained tick: the worker calls loopx quota should-run itself, "
-                "then builds the per-tick prompt and invokes cursor-agent -p --model $LOOPX_CURSOR_MODEL. "
-                "Run ~/.cursor/bin/loopx-cursor-cli-tick-worker directly after setting "
-                "LOOPX_GOAL_ID, LOOPX_AGENT_ID, LOOPX_PROJECT, and LOOPX_CURSOR_MODEL."
+                "Self-contained tick: gates via loopx quota should-run, then calls "
+                "loopx heartbeat-prompt --thin to get the adaptive task_body (goal-start "
+                "instructions when no todos exist, execution instructions otherwise), "
+                "then invokes cursor-agent -p <task_body> --model $LOOPX_CURSOR_MODEL. "
+                "Same unified planning+execution behaviour as the Codex TUI goal session."
             ),
         },
         "host_mutation": {
