@@ -35,12 +35,13 @@ def run_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
 def main() -> int:
     catalog = build_agent_type_catalog()
     agent_types = {item["agent_type"] for item in catalog["canonical_agent_types"]}
-    assert {"codex-app", "codex-cli", "claude-code", "manual", "other-agent"} <= agent_types
+    assert {"codex-app", "codex-cli", "claude-code", "cursor-cli", "manual", "other-agent"} <= agent_types
     ambiguous = {item["input"]: item["use_one_of"] for item in catalog["ambiguous_inputs"]}
     assert ambiguous["codex"] == ["codex-app", "codex-cli"], ambiguous
 
     assert agent_type_for_host_surface("chat-box") == "codex-app"
     assert agent_type_for_host_surface("codex-cli-tui") == "codex-cli"
+    assert agent_type_for_host_surface("cursor-cli") == "cursor-cli"
 
     codex_app = build_host_loop_activation_packet(agent_type="codex-app", goal_id="demo")
     codex_cli = build_host_loop_activation_packet(agent_type="codex-cli", goal_id="demo")
@@ -48,6 +49,17 @@ def main() -> int:
     assert codex_app["activation_method"] == "create_or_update_codex_app_automation", codex_app
     assert codex_cli["host_mutation"]["host_command"] == "/goal <task_body>", codex_cli
     assert claude_code["host_mutation"]["host_command"] == "/loop", claude_code
+
+    cursor_cli = build_host_loop_activation_packet(agent_type="cursor-cli", goal_id="demo")
+    assert cursor_cli["host_surface"] == "cursor_cli_external_loop_driver", cursor_cli
+    assert cursor_cli["native_loop_runtime_present"] is False, cursor_cli
+    assert cursor_cli["native_goal_api_present"] is False, cursor_cli
+    assert cursor_cli["control_plane"] == "loopx_cli_subcommands", cursor_cli
+
+    # "cursor" is an accepted alias, not an ambiguous input — resolves unambiguously to cursor-cli
+    cursor_alias = build_host_loop_activation_packet(agent_type="cursor", goal_id="demo")
+    assert cursor_alias["agent_type"] == "cursor-cli", cursor_alias
+    assert "cursor" not in {item["input"] for item in catalog["ambiguous_inputs"]}, catalog
 
     list_result = run_cli("agent-onboard", "--list-agent-types")
     list_payload = json.loads(list_result.stdout)

@@ -11,7 +11,7 @@ from .project_prompt import (
 SCHEMA_VERSION = "loopx_host_loop_activation_v1"
 AGENT_TYPE_CATALOG_SCHEMA_VERSION = "loopx_agent_type_catalog_v0"
 
-SUPPORTED_AGENT_TYPES = ["codex-app", "codex-cli", "claude-code", "manual", "other-agent"]
+SUPPORTED_AGENT_TYPES = ["codex-app", "codex-cli", "claude-code", "cursor-cli", "manual", "other-agent"]
 
 AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
     "codex-app": {
@@ -38,6 +38,19 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
         "host_loop": "native /loop gated by LoopX",
         "entry": "/loopx <task> then /loop",
         "accepted_inputs": ["claude-code", "claude_code", "claude code", "cc"],
+    },
+    "cursor-cli": {
+        "display_name": "Cursor CLI",
+        "host_loop": "external loop driver re-invoking cursor-agent -p, gated by LoopX CLI should_run",
+        "entry": "loopx slash-commands --install --surface cursor, then the LoopX-owned tick driver",
+        "accepted_inputs": [
+            "cursor-cli",
+            "cursor_cli",
+            "cursor cli",
+            "cursor-agent",
+            "cursor agent",
+            "cursor",
+        ],
     },
     "manual": {
         "display_name": "Manual shell / external scheduler",
@@ -96,6 +109,7 @@ HOST_SURFACE_TO_AGENT_TYPE = {
     "chat-box": "codex-app",
     "codex-cli-tui": "codex-cli",
     "claude-code": "claude-code",
+    "cursor-cli": "cursor-cli",
     "shell": "manual",
     "http": "other-agent",
     "worker-bridge": "other-agent",
@@ -215,6 +229,7 @@ def _heartbeat_commands(
         "codex-app": "Codex App heartbeat automation",
         "codex-cli": "Codex CLI /goal visible TUI loop",
         "claude-code": "Claude Code native /loop gated by LoopX",
+        "cursor-cli": "Cursor CLI external loop driver re-invoking cursor-agent -p, gated by LoopX",
         "manual": "External scheduler or manual shell LoopX poll",
         "other-agent": "Custom agent host loop gated by LoopX",
     }
@@ -319,6 +334,42 @@ def _claude_code_activation(commands: dict[str, str], cli_bin: str) -> dict[str,
     }
 
 
+def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
+    return {
+        "host_surface": "cursor_cli_external_loop_driver",
+        "entry_command_hint": "loopx slash-commands --install --surface cursor, then start the LoopX-owned tick driver",
+        "activation_method": "install_surface_then_run_external_tick_driver",
+        "activation_input_command": commands["heartbeat_prompt_json"],
+        "setup_command": f"{cli_bin} slash-commands --install --surface cursor",
+        "native_goal_api_present": False,
+        "native_loop_runtime_present": False,
+        "control_plane": "loopx_cli_subcommands",
+        "host_mutation": {
+            "owner": "Cursor CLI",
+            "host_command": "cursor-agent -p <task_body>",
+            "cli_can_mutate_directly": False,
+            "missing_host_tool_gate": (
+                "No native Cursor CLI loop runtime present; surface a pasteable "
+                "external-loop gate showing the cursor-agent invocation and the "
+                "`loopx quota should-run` gate command."
+            ),
+        },
+        "activation_steps": [
+            "Install or refresh the Cursor CLI LoopX surface: `loopx slash-commands --install --surface cursor`.",
+            "Run the heartbeat-prompt JSON command after project state and todos are written.",
+            "Read task_body from the JSON payload.",
+            "Start the LoopX-owned external tick driver; it gates each invocation through `loopx quota should-run`.",
+            "The tick driver invokes `cursor-agent -p <task_body>` per allowed tick.",
+            "Auto-approval flags (--force / --approve-mcps) are opt-in with an explicit safety warning; do not set them by default.",
+        ],
+        "success_criteria": [
+            "The LoopX-owned external tick driver is running for this goal.",
+            "Each tick starts from `loopx quota should-run` before invoking cursor-agent.",
+            "Writeback uses `loopx todo complete` and `loopx quota spend-slot` after validated delivery.",
+        ],
+    }
+
+
 def _manual_activation(commands: dict[str, str]) -> dict[str, Any]:
     return {
         "host_surface": "external_scheduler_or_manual_shell",
@@ -365,6 +416,8 @@ def build_host_loop_activation_packet(
         surface = _codex_cli_activation(commands)
     elif canonical == "claude-code":
         surface = _claude_code_activation(commands, cli_bin)
+    elif canonical == "cursor-cli":
+        surface = _cursor_cli_activation(commands, cli_bin)
     else:
         surface = _manual_activation(commands)
         if canonical == "other-agent":
