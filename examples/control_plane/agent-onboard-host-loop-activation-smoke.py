@@ -78,6 +78,13 @@ def main() -> int:
     assert "quota" in CURSOR_CLI_TICK_WORKER_PY and "should-run" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must embed the quota should-run gate"
     )
+    assert "LOOPX_CURSOR_MODEL" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must read LOOPX_CURSOR_MODEL"
+    assert "'--model'" in CURSOR_CLI_TICK_WORKER_PY or '"--model"' in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must pass --model to cursor-agent"
+    )
+    assert "composer-2.5" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must have a safe model default"
+    assert tick_driver.get("model_env_var") == "LOOPX_CURSOR_MODEL", tick_driver
+    assert tick_driver.get("model_default") == "composer-2.5", tick_driver
 
     # Phase 3: slash-commands --install --surface cursor exposes cursor_tick_worker path
     install_dry = install_slash_commands(execute=False, surfaces=["cursor"])

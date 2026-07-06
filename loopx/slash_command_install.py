@@ -311,6 +311,25 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
             ),
             "\n".join(
                 [
+                    "## Model selection and cost control",
+                    "",
+                    "Set `LOOPX_CURSOR_MODEL` to control which model each tick uses:",
+                    "",
+                    "```bash",
+                    "export LOOPX_CURSOR_MODEL=composer-2.5        # standard (default)",
+                    "export LOOPX_CURSOR_MODEL=gpt-5.3-codex-low   # cheaper",
+                    "export LOOPX_CURSOR_MODEL=gpt-5.3-codex-high  # more capable, more expensive",
+                    "```",
+                    "",
+                    "If `LOOPX_CURSOR_MODEL` is not set, the tick defaults to `composer-2.5`",
+                    "and prints a warning. Run `cursor-agent --list-models` to see all options.",
+                    "Thinking/high-reasoning models (e.g. `claude-opus-4-8-thinking-high`) cost",
+                    "significantly more per tick — set `LOOPX_CURSOR_MODEL` explicitly to avoid",
+                    "unexpected spend.",
+                ]
+            ),
+            "\n".join(
+                [
                     "## Auto-approval flags (opt-in, not default)",
                     "",
                     "`cursor-agent` flags `--force`, `--yolo`, and `--approve-mcps` grant unsandboxed "

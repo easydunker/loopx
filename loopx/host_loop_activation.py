@@ -350,13 +350,19 @@ def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, 
             "tick_installed_by": f"{cli_bin} slash-commands --install --surface cursor",
             "tick_invocation": "~/.cursor/bin/loopx-cursor-cli-tick-worker",
             "pane_a2a_compat": "LOOPX_PANE_WORKER_TURN=~/.cursor/bin/loopx-cursor-cli-tick-worker $LOOPX_PANE_A2A_TICK",
+            "model_env_var": "LOOPX_CURSOR_MODEL",
+            "model_default": "composer-2.5",
+            "model_note": (
+                "Set LOOPX_CURSOR_MODEL to control cost per tick. "
+                "Defaults to composer-2.5 with a warning if unset. "
+                "Thinking/high models cost significantly more — set explicitly. "
+                "Run cursor-agent --list-models for available options."
+            ),
             "note": (
                 "Self-contained tick: the worker calls loopx quota should-run itself, "
-                "then builds the per-tick prompt and invokes cursor-agent -p. "
+                "then builds the per-tick prompt and invokes cursor-agent -p --model $LOOPX_CURSOR_MODEL. "
                 "Run ~/.cursor/bin/loopx-cursor-cli-tick-worker directly after setting "
-                "LOOPX_GOAL_ID, LOOPX_AGENT_ID, and LOOPX_PROJECT. "
-                "Compatible with loopx-pane-a2a-tick when LOOPX_PANE_A2A_TICK is available "
-                "(set LOOPX_PANE_WORKER_TURN to the tick worker path)."
+                "LOOPX_GOAL_ID, LOOPX_AGENT_ID, LOOPX_PROJECT, and LOOPX_CURSOR_MODEL."
             ),
         },
         "host_mutation": {
@@ -373,6 +379,7 @@ def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, 
             "Install or refresh the Cursor CLI LoopX surface: `loopx slash-commands --install --surface cursor`.",
             "This writes ~/.cursor/rules/loopx.mdc (tick protocol) and ~/.cursor/bin/loopx-cursor-cli-tick-worker (self-contained tick).",
             "Set env: export LOOPX_GOAL_ID=<id> LOOPX_AGENT_ID=<id> LOOPX_PROJECT=$(pwd)",
+            "Set model: export LOOPX_CURSOR_MODEL=composer-2.5  # or gpt-5.3-codex-low for cheaper",
             "Run one tick: ~/.cursor/bin/loopx-cursor-cli-tick-worker",
             "The tick worker gates via loopx quota should-run, then invokes cursor-agent -p per allowed tick.",
             "Auto-approval flags (--force / --approve-mcps) are opt-in with an explicit safety warning; do not set them by default.",

@@ -386,6 +386,17 @@ role = (
 )
 project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
 cursor_agent_bin = os.environ.get('LOOPX_CURSOR_AGENT_BIN', 'cursor-agent')
+cursor_model = os.environ.get('LOOPX_CURSOR_MODEL', '').strip()
+_DEFAULT_MODEL = 'composer-2.5'
+if not cursor_model:
+    print(
+        f'\n[LoopX cursor-cli tick] LOOPX_CURSOR_MODEL not set; '
+        f'defaulting to {_DEFAULT_MODEL!r}. '
+        f'Set LOOPX_CURSOR_MODEL to control cost '
+        f'(run cursor-agent --list-models for options).\n',
+        flush=True,
+    )
+    cursor_model = _DEFAULT_MODEL
 
 if not goal or not agent:
     print(
@@ -452,7 +463,7 @@ prompt = '\n'.join(
 )
 
 result = subprocess.run(
-    [cursor_agent_bin, '-p', prompt, '--output-format', 'json'],
+    [cursor_agent_bin, '-p', prompt, '--model', cursor_model, '--output-format', 'json'],
     cwd=project,
 )
 sys.exit(result.returncode)
