@@ -55,7 +55,8 @@ incident report, or launch draft.
 - [Heartbeat automation prompt](heartbeat-automation-prompt.md): current
   heartbeat prompt contract.
 - [Runtime connector catalog](runtime-connector-catalog.md): public v0 catalog
-  for Codex App, Codex CLI TUI, Claude Code loop, shell, HTTP, and worker
+  for Codex App, Codex CLI TUI, Claude Code loop, Cursor CLI external tick
+  driver, shell, HTTP, and worker
   bridge connectors.
 - [Quota allocation](quota-allocation.md): should-run and spend semantics.
 - [Dashboard budget governance](dashboard-budget-governance-contract.md):

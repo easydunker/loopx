@@ -225,6 +225,76 @@ def _claude_home(value: str | None = None) -> Path:
     return Path(raw).expanduser()
 
 
+def _cursor_home(value: str | None = None) -> Path:
+    raw = value or os.environ.get("CURSOR_HOME") or str(Path.home() / ".cursor")
+    return Path(raw).expanduser()
+
+
+def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
+    return "\n\n".join(
+        [
+            "---\ndescription: \"LoopX control-plane protocol for cursor-agent. Gates each delivery tick through loopx quota should-run; writeback via loopx todo complete + loopx quota spend-slot.\"\nalwaysApply: false\n---",
+            _managed_marker(command="loopx.mdc", surface="cursor"),
+            "# LoopX Protocol for Cursor CLI",
+            (
+                "Treat this as the LoopX tick protocol for `cursor-agent` (`cursor-cli` agent type). "
+                "Cursor CLI has no native loop runtime; LoopX owns the external tick driver that "
+                "re-invokes `cursor-agent -p` each tick."
+            ),
+            "\n".join(
+                [
+                    "## Control-plane gate (shell out to loopx CLI — Codex-style)",
+                    "",
+                    "At the start of each tick, before any delivery work:",
+                    "",
+                    "```bash",
+                    f"{cli_bin} quota should-run --goal-id <goal_id> --agent-id <agent_id>",
+                    "```",
+                    "",
+                    "If `should_run` is false: emit a compact paused summary and stop — do not do delivery work or spend quota.",
+                    "",
+                    "If `should_run` is true: proceed with one bounded delivery segment.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "## Bounded delivery (one segment per tick)",
+                    "",
+                    f"- Read `{cli_bin} status --project .` and `{cli_bin} todo claim ...` to understand the active task.",
+                    "- Do one concrete, bounded, public-safe delivery segment.",
+                    f"- Write progress through `{cli_bin} todo update ...`.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "## Writeback after completed delivery",
+                    "",
+                    "After a successfully completed delivery segment:",
+                    "",
+                    "```bash",
+                    f"{cli_bin} todo complete --todo-id <todo_id>",
+                    f"{cli_bin} quota spend-slot --goal-id <goal_id> --agent-id <agent_id>",
+                    "```",
+                    "",
+                    "Only spend a slot on validated, bounded completion — not on partial progress.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "## Auto-approval flags (opt-in, not default)",
+                    "",
+                    "`cursor-agent` flags `--force`, `--yolo`, and `--approve-mcps` grant unsandboxed "
+                    "write and execution auto-approval. **Do not set these by default.** "
+                    "They are opt-in and must be authorized by the project owner with an explicit "
+                    "safety acknowledgment. The default `cursor-agent -p <task_body>` is the safe "
+                    "conservative baseline.",
+                ]
+            ),
+            "Keep public/private boundaries intact and do not perform external writes unless the active LoopX state or owner explicitly authorizes them.",
+        ]
+    ) + "\n"
+
+
 def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
     requested = surfaces or ["all"]
     normalized: list[str] = []
@@ -235,6 +305,8 @@ def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
             candidates = ["codex"]
         elif surface in {"codex-app", "codex-ide", "codex-cli"}:
             candidates = ["codex"]
+        elif surface in {"cursor", "cursor-cli"}:
+            candidates = ["cursor"]
         else:
             candidates = [surface]
         for candidate in candidates:
@@ -252,11 +324,13 @@ def install_slash_commands(
     include_legacy_aliases: bool = True,
     codex_home: str | None = None,
     claude_home: str | None = None,
+    cursor_home: str | None = None,
 ) -> dict[str, Any]:
     specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=include_legacy_aliases)
     effective_surfaces = _normalize_surfaces(surfaces)
     codex_root = _codex_home(codex_home)
     claude_root = _claude_home(claude_home)
+    cursor_root = _cursor_home(cursor_home)
     installed: list[dict[str, Any]] = []
 
     if "codex" in effective_surfaces:
@@ -432,6 +506,31 @@ def install_slash_commands(
                 }
             )
 
+    if "cursor" in effective_surfaces:
+        rules_dir = cursor_root / "rules"
+        mdc_path = rules_dir / "loopx.mdc"
+        if uninstall:
+            mdc_status = _retire_status(mdc_path, execute=execute)
+        else:
+            mdc_content = _cursor_loopx_mdc_body(cli_bin=cli_bin)
+            mdc_status = _target_status(mdc_path, mdc_content, execute=execute)
+        installed.append(
+            {
+                "surface": "cursor",
+                "host_surfaces": ["cursor-cli"],
+                "mechanism": "cursor_rules_loopx_mdc",
+                "command": "loopx.mdc",
+                "path": str(mdc_path),
+                "status": mdc_status,
+                "invoke_as": [],
+                "note": (
+                    "Tick protocol for cursor-agent. "
+                    "Auto-approval flags (--force/--yolo/--approve-mcps) are documented as "
+                    "opt-in with a safety warning; not enabled by default."
+                ),
+            }
+        )
+
     status_counts: dict[str, int] = {}
     for item in installed:
         status = str(item["status"])
@@ -452,6 +551,7 @@ def install_slash_commands(
             "codex_prompt_dir": None,
             "codex_skill_dir": str(codex_root / "skills") if "codex" in effective_surfaces else None,
             "claude_skill_dir": str(claude_root / "skills") if "claude-code" in effective_surfaces else None,
+            "cursor_rule_dir": str(cursor_root / "rules") if "cursor" in effective_surfaces else None,
             "status_counts": status_counts,
             "skip_policy": (
                 "Uninstall removes only LoopX-managed files; user files without a LoopX managed marker are preserved"
@@ -464,6 +564,7 @@ def install_slash_commands(
             "Codex does not currently support user-defined native top-level slash commands; use explicit skill invocation through `$loopx` or `/skills`.",
             "Only explicit LoopX command-facade skills are installed with agents/openai.yaml policy allow_implicit_invocation=false; richer workflow skills stay implicit.",
             "Claude Code discovers user skills from CLAUDE_HOME/skills and exposes each skill name as a slash command.",
+            "Cursor rules are written to CURSOR_HOME/rules/loopx.mdc; cursor-agent picks them up as a user-level tick protocol. Auto-approval flags are opt-in, not the default.",
             "Uninstall is fail-closed: it retires only files carrying the LoopX managed marker and leaves user-owned files in place.",
         ],
     }
@@ -482,12 +583,15 @@ def render_slash_command_install_markdown(payload: dict[str, Any]) -> str:
     codex_prompt_dir = payload.get("summary", {}).get("codex_prompt_dir")
     codex_skill_dir = payload.get("summary", {}).get("codex_skill_dir")
     claude_skill_dir = payload.get("summary", {}).get("claude_skill_dir")
+    cursor_rule_dir = payload.get("summary", {}).get("cursor_rule_dir")
     if codex_prompt_dir:
         lines.append(f"- codex prompts: `{codex_prompt_dir}`")
     if codex_skill_dir:
         lines.append(f"- codex skills: `{codex_skill_dir}`")
     if claude_skill_dir:
         lines.append(f"- claude skills: `{claude_skill_dir}`")
+    if cursor_rule_dir:
+        lines.append(f"- cursor rules: `{cursor_rule_dir}`")
     counts = payload.get("summary", {}).get("status_counts") or {}
     if isinstance(counts, dict) and counts:
         count_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))

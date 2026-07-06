@@ -131,7 +131,7 @@ Start agent-first: paste one setup message for the surface you already use,
 then start real work through the LoopX command entry for that host.
 Agents and host integrations can make this deterministic with
 `loopx agent-onboard --list-agent-types`, then pass an exact runtime such as
-`codex-app`, `codex-cli`, or `claude-code`. Ambiguous values such as `codex`
+`codex-app`, `codex-cli`, `claude-code`, or `cursor-cli`. Ambiguous values such as `codex`
 are intentionally rejected because Codex App automation and Codex CLI `/goal`
 use different host-loop activation paths.
 
@@ -147,6 +147,10 @@ Choose your surface:
   pasteable gate.
 - **Claude Code**: best when Claude Code's native `/loop` should drive each tick.
   Install the opt-in adapter, run `/loopx <task>`, then `/loop`.
+- **Cursor CLI**: best when you want to run `cursor-agent` headless, gated by
+  LoopX. Install the opt-in surface rule, run
+  `loopx agent-onboard --agent-type cursor-cli`, then start the LoopX-owned
+  external tick driver.
 - **Manual shell / other agents**: best when you want LoopX state without a
   supported runtime bridge. Install from the no-clone installer, then run
   `loopx doctor` and `loopx bootstrap`.
@@ -276,9 +280,38 @@ Claude Code with `/loopx <task>` then `/loop`. Opt-in install, scope choice, the
 optional `--harden` gate, and uninstall are in
 [loopx/claude_goal_mode/README.md](loopx/claude_goal_mode/README.md).
 
+### Cursor CLI
+
+Cursor CLI (`cursor-agent`) is a first-class agent type. It has **no native loop
+runtime**: LoopX owns the external tick driver that re-invokes `cursor-agent -p`
+each tick, gated by `loopx quota should-run` — the same Codex-style CLI control
+plane.
+
+Install the LoopX surface rule for Cursor:
+
+```bash
+loopx slash-commands --install --surface cursor
+```
+
+This writes `~/.cursor/rules/loopx.mdc` — the tick protocol that instructs
+`cursor-agent` to shell out to `loopx` CLI subcommands for gating and writeback.
+
+Then connect and onboard the project:
+
+```bash
+cd /path/to/your-project
+loopx agent-onboard --agent-type cursor-cli --project .
+```
+
+The external tick driver invokes `cursor-agent -p <task_body>` per allowed tick.
+The default invocation is conservative. To enable unsandboxed write/exec
+auto-approval, pass `--force`, `--yolo`, or `--approve-mcps` as an **explicit
+opt-in** with your own safety acknowledgment — these flags are not set by
+default.
+
 ### Other Agents And Manual Shell
 
-For Cursor, another terminal agent, or a manual shell, use the
+For another terminal agent or a manual shell, use the
 same no-clone installer. Be cautious with non-Codex agents: LoopX can only
 drive the agent path if that surface has at least one usable control hook, such
 as shell/CLI execution, a task command, an automation or heartbeat hook,
