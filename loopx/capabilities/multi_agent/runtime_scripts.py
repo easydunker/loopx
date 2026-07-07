@@ -388,6 +388,7 @@ project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
 cursor_agent_bin = os.environ.get('LOOPX_CURSOR_AGENT_BIN', 'cursor-agent')
 cursor_model = os.environ.get('LOOPX_CURSOR_MODEL', '').strip()
 _DEFAULT_MODEL = 'composer-2.5'
+_PAUSED_EXIT = 75
 if not cursor_model:
     print(
         f'\n[LoopX cursor-cli tick] LOOPX_CURSOR_MODEL not set; '
@@ -417,7 +418,7 @@ if quota_result.returncode != 0:
         '\n[LoopX cursor-cli tick] quota should-run=false; paused — no cursor-agent invocation.\n',
         flush=True,
     )
-    raise SystemExit(0)
+    raise SystemExit(_PAUSED_EXIT)
 
 # Build the tick prompt from heartbeat-prompt, same as Codex.
 # heartbeat-prompt is adaptive: when no todos exist it emits goal-start
@@ -493,6 +494,12 @@ while True:
             print(f'\n[LoopX cursor-cli loop] reached max_ticks={max_ticks}; stopping.\n', flush=True)
             raise SystemExit(0)
         time.sleep(tick_interval)
+    elif result.returncode == 75:
+        print(
+            f'\n[LoopX cursor-cli loop] quota paused; sleeping {pause_interval}s before retry.\n',
+            flush=True,
+        )
+        time.sleep(pause_interval)
     elif result.returncode == 2:
         print(f'\n[LoopX cursor-cli loop] tick worker exited with 2 (config error); stopping.\n', flush=True)
         raise SystemExit(2)

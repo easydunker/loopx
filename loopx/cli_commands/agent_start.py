@@ -176,12 +176,12 @@ def _start_cursor_cli(
             "action": "surface_not_installed",
             "error": (
                 f"Loop script not found at {_CURSOR_LOOP_SCRIPT}. "
-                "Run: loopx slash-commands --install --surface cursor --execute"
+                "Run: loopx slash-commands --install --surface cursor"
             ),
             "instructions": [
                 "Install the cursor surface first:",
                 "```bash",
-                "loopx slash-commands --install --surface cursor --execute",
+                "loopx slash-commands --install --surface cursor",
                 "```",
             ],
         }

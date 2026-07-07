@@ -15,7 +15,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.bootstrap_command_pack import build_loopx_bootstrap_command_pack  # noqa: E402
-from loopx.capabilities.multi_agent.runtime_scripts import CURSOR_CLI_TICK_WORKER_PY  # noqa: E402
+from loopx.capabilities.multi_agent.runtime_scripts import (  # noqa: E402
+    CURSOR_CLI_LOOP_PY,
+    CURSOR_CLI_TICK_WORKER_PY,
+)
 from loopx.host_loop_activation import (  # noqa: E402
     agent_type_for_host_surface,
     build_agent_type_catalog,
@@ -76,6 +79,18 @@ def main() -> int:
     assert "LOOPX_AGENT_ID" in CURSOR_CLI_TICK_WORKER_PY, "tick worker must read LOOPX_AGENT_ID"
     assert "quota" in CURSOR_CLI_TICK_WORKER_PY and "should-run" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must embed the quota should-run gate"
+    )
+    assert "_PAUSED_EXIT = 75" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must distinguish paused quota from completed ticks"
+    )
+    assert "raise SystemExit(_PAUSED_EXIT)" in CURSOR_CLI_TICK_WORKER_PY, (
+        "paused quota must not return success to the outer loop"
+    )
+    assert "result.returncode == 75" in CURSOR_CLI_LOOP_PY, (
+        "outer loop must treat paused quota separately from completed ticks"
+    )
+    assert "quota paused" in CURSOR_CLI_LOOP_PY and "pause_interval" in CURSOR_CLI_LOOP_PY, (
+        "paused quota must use the pause backoff path"
     )
     assert "heartbeat-prompt" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must use heartbeat-prompt as the adaptive prompt source"
