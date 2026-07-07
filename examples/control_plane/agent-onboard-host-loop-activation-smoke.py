@@ -92,6 +92,9 @@ def main() -> int:
     assert "quota paused" in CURSOR_CLI_LOOP_PY and "pause_interval" in CURSOR_CLI_LOOP_PY, (
         "paused quota must use the pause backoff path"
     )
+    assert "Path(__file__).resolve().with_name('loopx-cursor-cli-tick-worker')" in CURSOR_CLI_LOOP_PY, (
+        "loop script must default to the sibling worker installed beside it"
+    )
     assert "heartbeat-prompt" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must use heartbeat-prompt as the adaptive prompt source"
     )

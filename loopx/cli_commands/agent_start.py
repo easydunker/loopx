@@ -13,9 +13,16 @@ from ..host_loop_activation import build_agent_type_catalog, build_host_loop_act
 PrintPayload = Callable[[dict[str, Any], str, Callable[[dict[str, Any]], str]], None]
 FormatSelector = Callable[..., str]
 
-_CURSOR_TICK_WORKER = Path.home() / ".cursor" / "bin" / "loopx-cursor-cli-tick-worker"
-_CURSOR_LOOP_SCRIPT = Path.home() / ".cursor" / "bin" / "loopx-cursor-cli-loop"
 _DEFAULT_CURSOR_MODEL = "composer-2.5"
+
+
+def _cursor_home() -> Path:
+    raw = os.environ.get("CURSOR_HOME") or str(Path.home() / ".cursor")
+    return Path(raw).expanduser()
+
+
+def _cursor_loop_script() -> Path:
+    return _cursor_home() / "bin" / "loopx-cursor-cli-loop"
 
 
 def register_agent_start_command(
@@ -166,7 +173,9 @@ def _start_cursor_cli(
         or _DEFAULT_CURSOR_MODEL
     )
 
-    if not _CURSOR_LOOP_SCRIPT.exists():
+    cursor_loop_script = _cursor_loop_script()
+
+    if not cursor_loop_script.exists():
         payload: dict[str, Any] = {
             "ok": False,
             "agent_type": canonical,
@@ -175,7 +184,7 @@ def _start_cursor_cli(
             "project": project,
             "action": "surface_not_installed",
             "error": (
-                f"Loop script not found at {_CURSOR_LOOP_SCRIPT}. "
+                f"Loop script not found at {cursor_loop_script}. "
                 "Run: loopx slash-commands --install --surface cursor"
             ),
             "instructions": [
@@ -204,7 +213,7 @@ def _start_cursor_cli(
         f"LOOPX_PROJECT={project} "
         f"LOOPX_CURSOR_MODEL={model} "
         + (f"LOOPX_CURSOR_MAX_TICKS={args.max_ticks} " if args.max_ticks else "")
-        + str(_CURSOR_LOOP_SCRIPT)
+        + str(cursor_loop_script)
     )
 
     if args.dry_run:
@@ -225,7 +234,7 @@ def _start_cursor_cli(
         f"\n[loopx agent-start] cursor-cli goal={goal_id} agent={agent_id} model={model}\n",
         flush=True,
     )
-    os.execve(str(_CURSOR_LOOP_SCRIPT), [str(_CURSOR_LOOP_SCRIPT)], env)
+    os.execve(str(cursor_loop_script), [str(cursor_loop_script)], env)
     return 0  # unreachable
 
 

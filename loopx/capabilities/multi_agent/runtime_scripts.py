@@ -471,7 +471,7 @@ if not goal or not agent:
 
 tick_worker = os.environ.get(
     'LOOPX_CURSOR_TICK_WORKER',
-    str(Path.home() / '.cursor' / 'bin' / 'loopx-cursor-cli-tick-worker'),
+    str(Path(__file__).resolve().with_name('loopx-cursor-cli-tick-worker')),
 )
 tick_interval = int(os.environ.get('LOOPX_CURSOR_TICK_INTERVAL', '10'))
 pause_interval = int(os.environ.get('LOOPX_CURSOR_PAUSE_INTERVAL', '30'))
