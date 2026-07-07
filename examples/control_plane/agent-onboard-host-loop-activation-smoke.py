@@ -144,6 +144,45 @@ def main() -> int:
     assert ambiguous_payload["ok"] is False, ambiguous_payload
     assert ambiguous_payload["suggestions"] == ["codex-app", "codex-cli"], ambiguous_payload
 
+    ambiguous_start = run_cli(
+        "agent-start",
+        "--agent-type",
+        "codex",
+        "--goal-id",
+        "demo",
+        check=False,
+    )
+    assert ambiguous_start.returncode == 2, ambiguous_start.stdout
+    ambiguous_start_payload = json.loads(ambiguous_start.stdout)
+    assert ambiguous_start_payload["ok"] is False, ambiguous_start_payload
+    assert ambiguous_start_payload["suggestions"] == ["codex-app", "codex-cli"], ambiguous_start_payload
+
+    unsupported_start = run_cli(
+        "agent-start",
+        "--agent-type",
+        "unsupported-agent",
+        "--goal-id",
+        "demo",
+        check=False,
+    )
+    assert unsupported_start.returncode == 2, unsupported_start.stdout
+    unsupported_start_payload = json.loads(unsupported_start.stdout)
+    assert unsupported_start_payload["ok"] is False, unsupported_start_payload
+    assert unsupported_start_payload["error_kind"] == "ambiguous_or_unsupported_agent_type", unsupported_start_payload
+
+    display_alias_start = run_cli(
+        "agent-start",
+        "--agent-type",
+        "Cursor CLI",
+        "--goal-id",
+        "demo",
+        "--dry-run",
+        check=False,
+    )
+    display_alias_payload = json.loads(display_alias_start.stdout)
+    assert display_alias_payload["agent_type"] == "cursor-cli", display_alias_payload
+    assert display_alias_payload["action"] in {"dry_run", "surface_not_installed"}, display_alias_payload
+
     with tempfile.TemporaryDirectory(prefix="loopx-agent-onboard-smoke-") as tmp:
         project = Path(tmp) / "project"
         project.mkdir()

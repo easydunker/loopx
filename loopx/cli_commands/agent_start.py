@@ -7,7 +7,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..host_loop_activation import build_agent_type_catalog, build_host_loop_activation_packet
+from ..host_loop_activation import (
+    AgentTypeError,
+    build_agent_type_catalog,
+    build_host_loop_activation_packet,
+    normalize_agent_type,
+    render_agent_type_catalog_markdown,
+)
 
 
 PrintPayload = Callable[[dict[str, Any], str, Callable[[dict[str, Any]], str]], None]
@@ -91,16 +97,9 @@ def register_agent_start_command(
     )
 
 
-def _resolve_agent_type(raw: str) -> str:
-    catalog = build_agent_type_catalog()
-    for item in catalog["canonical_agent_types"]:
-        accepted = item.get("accepted_inputs", [item["agent_type"]])
-        if raw in accepted or raw == item["agent_type"]:
-            return item["agent_type"]
-    return raw
-
-
 def _render_agent_start_markdown(payload: dict[str, Any]) -> str:
+    if not payload.get("ok") and isinstance(payload.get("agent_type_catalog"), dict):
+        return render_agent_type_catalog_markdown(payload)
     lines = ["# loopx agent-start", ""]
     lines.append(f"- agent_type: `{payload.get('agent_type')}`")
     lines.append(f"- goal_id: `{payload.get('goal_id')}`")
@@ -125,7 +124,12 @@ def handle_agent_start_command(
     if args.command != "agent-start":
         return None
 
-    canonical = _resolve_agent_type(args.agent_type)
+    try:
+        canonical = normalize_agent_type(args.agent_type)
+    except AgentTypeError as exc:
+        print_payload(exc.to_payload(), output_format(args), _render_agent_start_markdown)
+        return 2
+
     goal_id = args.goal_id
     project = str(Path(args.project).resolve())
     agent_id = args.agent_id or f"{canonical}-{goal_id[:8]}"
