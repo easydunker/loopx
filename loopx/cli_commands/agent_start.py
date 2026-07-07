@@ -15,6 +15,7 @@ from ..host_loop_activation import (
     normalize_agent_type,
     render_agent_type_catalog_markdown,
 )
+from ..slash_command_install import MANAGED_MARKER_PREFIX
 
 
 PrintPayload = Callable[[dict[str, Any], str, Callable[[dict[str, Any]], str]], None]
@@ -23,13 +24,13 @@ FormatSelector = Callable[..., str]
 _DEFAULT_CURSOR_MODEL = "composer-2.5"
 
 
-def _cursor_home() -> Path:
-    raw = os.environ.get("CURSOR_HOME") or str(Path.home() / ".cursor")
+def _cursor_home(value: str | None = None) -> Path:
+    raw = value or os.environ.get("CURSOR_HOME") or str(Path.home() / ".cursor")
     return Path(raw).expanduser()
 
 
-def _cursor_loop_script() -> Path:
-    return _cursor_home() / "bin" / "loopx-cursor-cli-loop"
+def _cursor_loop_script(cursor_home: str | None = None) -> Path:
+    return _cursor_home(cursor_home) / "bin" / "loopx-cursor-cli-loop"
 
 
 def register_agent_start_command(
@@ -92,6 +93,15 @@ def register_agent_start_command(
         help="Seconds between ticks for cursor-cli loop (default: 10).",
     )
     parser.add_argument(
+        "--cursor-home",
+        metavar="DIR",
+        help=(
+            "Cursor home directory for cursor-cli. Defaults to CURSOR_HOME env var or ~/.cursor. "
+            "Use --cursor-home $(pwd)/.cursor to match a project-level install "
+            "(loopx slash-commands --install --surface cursor --cursor-home $(pwd)/.cursor)."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the command that would be run without executing it.",
@@ -142,6 +152,7 @@ def handle_agent_start_command(
             goal_id=goal_id,
             agent_id=agent_id,
             project=project,
+            cursor_home=getattr(args, "cursor_home", None),
             output_format=output_format,
             print_payload=print_payload,
         )
@@ -169,6 +180,7 @@ def _start_cursor_cli(
     goal_id: str,
     agent_id: str,
     project: str,
+    cursor_home: str | None = None,
     output_format: FormatSelector,
     print_payload: PrintPayload,
 ) -> int:
@@ -178,7 +190,10 @@ def _start_cursor_cli(
         or _DEFAULT_CURSOR_MODEL
     )
 
-    cursor_loop_script = _cursor_loop_script()
+    cursor_loop_script = _cursor_loop_script(cursor_home)
+    install_hint = "loopx slash-commands --install --surface cursor"
+    if cursor_home:
+        install_hint += f" --cursor-home {shlex.quote(cursor_home)}"
 
     if not cursor_loop_script.exists():
         payload: dict[str, Any] = {
@@ -190,23 +205,59 @@ def _start_cursor_cli(
             "action": "surface_not_installed",
             "error": (
                 f"Loop script not found at {cursor_loop_script}. "
-                "Run: loopx slash-commands --install --surface cursor"
+                f"Run: {install_hint}"
             ),
             "instructions": [
                 "Install the cursor surface first:",
                 "```bash",
-                "loopx slash-commands --install --surface cursor",
+                install_hint,
                 "```",
             ],
         }
         print_payload(payload, output_format(args), _render_agent_start_markdown)
         return 1
 
+    try:
+        script_content = cursor_loop_script.read_text(encoding="utf-8")
+    except OSError:
+        script_content = ""
+    if MANAGED_MARKER_PREFIX not in script_content:
+        payload = {
+            "ok": False,
+            "agent_type": canonical,
+            "goal_id": goal_id,
+            "agent_id": agent_id,
+            "project": project,
+            "action": "surface_not_managed",
+            "error": (
+                f"Loop script at {cursor_loop_script} exists but is not a LoopX-managed file. "
+                f"To install the LoopX-managed script, run: {install_hint}"
+            ),
+            "instructions": [
+                "The file at the cursor loop path is not LoopX-managed and will not be executed.",
+                "Install the LoopX cursor surface to create the managed script:",
+                "```bash",
+                install_hint,
+                "```",
+            ],
+        }
+        print_payload(payload, output_format(args), _render_agent_start_markdown)
+        return 1
+
+    global_registry = (
+        os.environ.get("LOOPX_GLOBAL_REGISTRY", "").strip()
+        or os.environ.get("LOOPX_REGISTRY", "").strip()
+    )
+
     env = os.environ.copy()
     env["LOOPX_GOAL_ID"] = goal_id
     env["LOOPX_AGENT_ID"] = agent_id
     env["LOOPX_PROJECT"] = project
     env["LOOPX_CURSOR_MODEL"] = model
+    if global_registry:
+        env["LOOPX_GLOBAL_REGISTRY"] = global_registry
+    if cursor_home:
+        env["CURSOR_HOME"] = str(_cursor_home(cursor_home))
     if args.max_ticks:
         env["LOOPX_CURSOR_MAX_TICKS"] = str(args.max_ticks)
     if args.tick_interval:
@@ -221,6 +272,10 @@ def _start_cursor_cli(
         _env("LOOPX_PROJECT", project),
         _env("LOOPX_CURSOR_MODEL", model),
     ]
+    if global_registry:
+        cmd_parts.append(_env("LOOPX_GLOBAL_REGISTRY", global_registry))
+    if cursor_home:
+        cmd_parts.append(_env("CURSOR_HOME", str(_cursor_home(cursor_home))))
     if args.max_ticks:
         cmd_parts.append(_env("LOOPX_CURSOR_MAX_TICKS", str(args.max_ticks)))
     if args.tick_interval:

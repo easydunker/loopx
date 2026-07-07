@@ -44,7 +44,7 @@ def _bootstrap_pack_command(
         "codex-app": "codex-app",
         "codex-cli": "codex-cli-tui",
         "claude-code": "claude-code",
-        "cursor-cli": "worker-bridge",
+        "cursor-cli": "cursor-cli",
         "manual": "shell",
         "other-agent": "worker-bridge",
     }
@@ -73,7 +73,11 @@ def _start_instruction(agent_type: str) -> str:
     if agent_type == "claude-code":
         return "Run `/loopx <task>` to arm LoopX, then run native `/loop`."
     if agent_type == "cursor-cli":
-        return "Run `loopx agent-start --agent-type cursor-cli --goal-id <goal_id>` to start the LoopX-owned tick loop."
+        return (
+            "Run `loopx agent-start --agent-type cursor-cli --goal-id <goal_id>` to start the LoopX-owned tick loop. "
+            "If you installed with `--cursor-home $(pwd)/.cursor`, pass the same flag to agent-start: "
+            "`loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --cursor-home $(pwd)/.cursor`."
+        )
     if agent_type == "manual":
         return "Use the CLI packet and wire an external scheduler, or run quota/status/todo commands manually."
     return "Use the host's explicit LoopX command facade such as `@loopx <task>` or `$loopx <task>`, then wire its scheduler through this packet."

@@ -387,7 +387,11 @@ role = (
 project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
 cursor_agent_bin = os.environ.get('LOOPX_CURSOR_AGENT_BIN', 'cursor-agent')
 cursor_model = os.environ.get('LOOPX_CURSOR_MODEL', '').strip()
-require_writeback = os.environ.get('LOOPX_CURSOR_REQUIRE_WRITEBACK', '0').strip().lower() not in {
+# Shared global registry for quota should-run/spend: sees the same operator gates and
+# quota state as dashboards. Set LOOPX_GLOBAL_REGISTRY to override.
+global_registry = os.environ.get('LOOPX_GLOBAL_REGISTRY', '').strip()
+# Writeback verification is on by default. Set LOOPX_CURSOR_REQUIRE_WRITEBACK=0 to opt out.
+require_writeback = os.environ.get('LOOPX_CURSOR_REQUIRE_WRITEBACK', '1').strip().lower() not in {
     '0',
     'false',
     'no',
@@ -414,8 +418,9 @@ if not goal or not agent:
 print(f'\n[LoopX cursor-cli tick] goal={goal} agent={agent}\n', flush=True)
 
 def run_quota_should_run():
+    registry_args = ['--registry', global_registry] if global_registry else []
     result = subprocess.run(
-        [loopx, '--format', 'json', 'quota', 'should-run',
+        [loopx, '--format', 'json', *registry_args, 'quota', 'should-run',
          '--goal-id', goal, '--agent-id', agent],
         capture_output=True, text=True,
         cwd=project,
@@ -435,8 +440,23 @@ def spent_slots(payload):
 
 # Quota gate — the same loopx quota should-run seam used by all LoopX agents.
 quota_result, quota_payload = run_quota_should_run()
-if quota_result.returncode != 0 or quota_payload.get('should_run') is not True:
-    reason = quota_payload.get('reason') if isinstance(quota_payload, dict) else ''
+if quota_result.returncode != 0:
+    # Any non-zero exit is a command/config failure (missing goal, bad registry, parse error).
+    # Do not treat this as a pause decision — stop so the operator sees the actionable error.
+    reason = (
+        (quota_payload.get('error') or quota_payload.get('status') or quota_payload.get('reason') or '')
+        if quota_payload else ''
+    )
+    print(
+        f'\n[LoopX cursor-cli tick] quota should-run command failed '
+        f'(exit {quota_result.returncode})'
+        f'{": " + str(reason) if reason else ""}; stopping.\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+elif quota_payload.get('should_run') is not True:
+    # Command succeeded (exit 0) but quota decided not to run — intentional pause.
+    reason = quota_payload.get('reason', '')
     print(
         f'\n[LoopX cursor-cli tick] quota should-run=false'
         f'{": " + str(reason) if reason else ""}; no cursor-agent invocation.\n',
@@ -487,7 +507,7 @@ if require_writeback:
             '(spent_slots increase) was not observed. This is a best-effort proxy check. '
             'Ensure the agent runs `loopx todo complete ...` and '
             '`loopx quota spend-slot ... --execute`. '
-            'Disable this opt-in check with LOOPX_CURSOR_REQUIRE_WRITEBACK=0.\n',
+            'Disable this check with LOOPX_CURSOR_REQUIRE_WRITEBACK=0.\n',
             flush=True,
         )
         raise SystemExit(1)
@@ -525,11 +545,16 @@ _loopx = os.environ.get('LOOPX_PANE_LOOPX') or str(
 if not Path(_loopx).exists():
     _loopx = shutil.which('loopx') or _loopx
 
+# Use shared global registry for scheduler hints so they see the same quota
+# state as dashboards and the tick worker. Passed through from agent-start.
+_global_registry = os.environ.get('LOOPX_GLOBAL_REGISTRY', '').strip()
+
 def _scheduler_hint_seconds() -> int | None:
     # Read recommended_interval_minutes from quota should-run scheduler_hint.
     try:
+        registry_args = ['--registry', _global_registry] if _global_registry else []
         r = subprocess.run(
-            [_loopx, '--format', 'json', 'quota', 'should-run',
+            [_loopx, '--format', 'json', *registry_args, 'quota', 'should-run',
              '--goal-id', goal, '--agent-id', agent],
             capture_output=True, text=True, cwd=project,
         )

@@ -284,6 +284,7 @@ def _goal_start_contract(*, goal_text: str | None, connected: bool, agent_type: 
                 "codex-app": "Codex App heartbeat automation",
                 "codex-cli": "visible Codex CLI `/goal <task_body>`",
                 "claude-code": "Claude Code native `/loop` after `/loopx <task>` arms LoopX",
+                "cursor-cli": "LoopX-owned external tick driver (`loopx agent-start --agent-type cursor-cli --goal-id <goal_id>`)",
                 "manual": "external scheduler or manual quota/status loop",
                 "other-agent": "custom host loop driver using the returned task body and quota guard",
             },
@@ -579,7 +580,8 @@ Host loop activation is part of setup, not a nice-to-have:
 If the host loop is already proven current, skip the mutation. If it is missing,
 unknown, or stale, use the command above to obtain `task_body` and activate the
 right host loop: Codex App automation, Codex CLI `/goal <task_body>`, Claude
-Code `/loop`, or the custom host-loop gate. If this session cannot mutate that
+Code `/loop`, Cursor CLI `loopx agent-start --agent-type cursor-cli --goal-id <goal_id>`,
+or the custom host-loop gate. If this session cannot mutate that
 host surface, report the exact gate; do not claim autonomous setup complete.
 Use `{commands.get("goal_start_agent_onboard_recheck", "")}` only when
 activation state is missing/unknown/stale or the agent type changed."""

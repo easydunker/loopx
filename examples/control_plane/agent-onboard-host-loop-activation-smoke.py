@@ -80,11 +80,19 @@ def main() -> int:
     assert "quota" in CURSOR_CLI_TICK_WORKER_PY and "should-run" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must embed the quota should-run gate"
     )
-    assert "'--format', 'json', 'quota', 'should-run'" in CURSOR_CLI_TICK_WORKER_PY, (
-        "tick worker must inspect the quota should-run JSON payload"
+    # quota should-run is called with --format json; registry args may be injected before subcommand
+    assert "'--format', 'json'" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must request JSON format for quota should-run"
+    )
+    assert "'quota', 'should-run'" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must include the quota should-run subcommand"
     )
     assert "quota_payload.get('should_run') is not True" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must gate on should_run, not command success"
+    )
+    # P1.3: quota command failure must exit 2 (stop), not 75 (pause-loop)
+    assert "raise SystemExit(2)" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must exit 2 on quota command/config failure, not pause-loop"
     )
     assert "_PAUSED_EXIT = 75" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must distinguish paused quota from completed ticks"
@@ -104,8 +112,19 @@ def main() -> int:
     assert "LOOPX_CURSOR_REQUIRE_WRITEBACK" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must expose an explicit opt-out for best-effort writeback verification"
     )
+    # P1.5: writeback defaults to enabled (opt-out, not opt-in)
+    assert "LOOPX_CURSOR_REQUIRE_WRITEBACK', '1'" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker writeback verification must default to enabled (opt-out via =0)"
+    )
     assert "after_spent_slots <= before_spent_slots" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must verify quota accounting before counting completion"
+    )
+    # P1.4: shared registry for quota calls
+    assert "LOOPX_GLOBAL_REGISTRY" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must respect LOOPX_GLOBAL_REGISTRY for shared quota should-run"
+    )
+    assert "LOOPX_GLOBAL_REGISTRY" in CURSOR_CLI_LOOP_PY, (
+        "loop script must propagate LOOPX_GLOBAL_REGISTRY to scheduler hint reads"
     )
     assert "heartbeat-prompt" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must use heartbeat-prompt as the adaptive prompt source"
@@ -215,6 +234,31 @@ def main() -> int:
     message = payload["message"]
     assert "/goal <task_body>" in message, message
     assert "agent-onboard" in message, message
+
+    # P1.2: agent-onboard for cursor-cli must emit --host-surface cursor-cli (not worker-bridge)
+    from loopx.agent_onboarding import build_agent_onboarding_packet  # noqa: E402
+    with tempfile.TemporaryDirectory(prefix="loopx-cursor-onboard-smoke-") as tmp2:
+        cursor_project = Path(tmp2) / "cursor-project"
+        cursor_project.mkdir()
+        cursor_onboard = build_agent_onboarding_packet(
+            project=cursor_project,
+            agent_type="cursor-cli",
+            goal_id="cursor-demo",
+            agent_id="cursor-agent1",
+        )
+    assert cursor_onboard["agent_type"] == "cursor-cli", cursor_onboard
+    bootstrap_cmd = cursor_onboard["commands"]["bootstrap_command_pack"]
+    assert "--host-surface cursor-cli" in bootstrap_cmd, (
+        f"agent-onboard for cursor-cli must emit --host-surface cursor-cli, got: {bootstrap_cmd!r}"
+    )
+    assert "worker-bridge" not in bootstrap_cmd, (
+        f"agent-onboard for cursor-cli must not emit worker-bridge, got: {bootstrap_cmd!r}"
+    )
+    # P1.1: start instruction must mention --cursor-home for project-level install
+    recommended_start = cursor_onboard["recommended_start"]
+    assert "--cursor-home" in recommended_start, (
+        f"cursor-cli start instruction must mention --cursor-home, got: {recommended_start!r}"
+    )
 
     return 0
 
