@@ -65,7 +65,31 @@ def _bootstrap_pack_command(
     return " ".join(parts)
 
 
-def _start_instruction(agent_type: str) -> str:
+def _cursor_cli_start_command(
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    project: str,
+    cli_bin: str,
+) -> str:
+    parts = [
+        shell_arg(cli_bin),
+        "agent-start",
+        "--agent-type",
+        "cursor-cli",
+        "--goal-id",
+        shell_arg(goal_id),
+        "--project",
+        shell_arg(project),
+        "--cursor-home",
+        "$(pwd)/.cursor",
+    ]
+    if agent_id:
+        parts.extend(["--agent-id", shell_arg(agent_id)])
+    return " ".join(parts)
+
+
+def _start_instruction(agent_type: str, *, start_command: str | None = None) -> str:
     if agent_type == "codex-app":
         return "Use `$loopx <task>` or select the LoopX skill from `/skills`; Codex App should then create/update the heartbeat automation."
     if agent_type == "codex-cli":
@@ -73,10 +97,11 @@ def _start_instruction(agent_type: str) -> str:
     if agent_type == "claude-code":
         return "Run `/loopx <task>` to arm LoopX, then run native `/loop`."
     if agent_type == "cursor-cli":
+        if start_command:
+            return f"Run `{start_command}` to start the LoopX-owned tick loop."
         return (
-            "Run `loopx agent-start --agent-type cursor-cli --goal-id <goal_id>` to start the LoopX-owned tick loop. "
-            "If you installed with `--cursor-home $(pwd)/.cursor`, pass the same flag to agent-start: "
-            "`loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --cursor-home $(pwd)/.cursor`."
+            "Run `loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --project . --cursor-home $(pwd)/.cursor` "
+            "to start the LoopX-owned tick loop."
         )
     if agent_type == "manual":
         return "Use the CLI packet and wire an external scheduler, or run quota/status/todo commands manually."
@@ -111,6 +136,15 @@ def build_agent_onboarding_packet(
         cli_bin=cli_bin,
         task_text=task_text,
     )
+    cursor_start_command: str | None = None
+    if canonical_agent_type == "cursor-cli":
+        resolved_agent_id = agent_id or f"cursor-cli-{resolved_goal_id[:8]}"
+        cursor_start_command = _cursor_cli_start_command(
+            goal_id=resolved_goal_id,
+            agent_id=resolved_agent_id,
+            project=resolved_project,
+            cli_bin=cli_bin,
+        )
     commands: dict[str, str] = {
         "doctor_or_install": render_codex_cli_no_clone_preflight(cli_bin=cli_bin),
         "bootstrap_command_pack": bootstrap_pack_command,
@@ -129,6 +163,8 @@ def build_agent_onboarding_packet(
     }
     if install_command:
         commands["install_command_facade"] = install_command
+    if cursor_start_command:
+        commands["agent_start"] = cursor_start_command
     if canonical_agent_type == "codex-cli":
         commands["codex_cli_bootstrap_message"] = (
             f"{shell_arg(cli_bin)} codex-cli-bootstrap-message "
@@ -146,7 +182,7 @@ def build_agent_onboarding_packet(
         "task_text": task_text,
         "project_connection": inspection,
         "host_loop_activation": host_loop_activation,
-        "recommended_start": _start_instruction(canonical_agent_type),
+        "recommended_start": _start_instruction(canonical_agent_type, start_command=cursor_start_command),
         "commands": commands,
         "cost_model": {
             "onboarding": "run once during install/connect or when the active host loop is missing/stale",

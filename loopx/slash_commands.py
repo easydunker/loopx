@@ -65,6 +65,7 @@ def build_slash_command_catalog(
                     "codex-app": "create/update Codex App heartbeat automation from heartbeat-prompt task_body",
                     "codex-cli": "set visible Codex CLI TUI `/goal <task_body>`",
                     "claude-code": "arm LoopX with `/loopx <task>`, then run native `/loop`",
+                    "cursor-cli": "run `loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id> --project . --cursor-home $(pwd)/.cursor`",
                     "manual": "wire an external scheduler or run quota/status manually",
                     "other-agent": "use the custom host loop driver declared by `loopx agent-onboard`",
                 },

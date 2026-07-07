@@ -287,20 +287,22 @@ runtime**: LoopX owns the external tick driver that re-invokes `cursor-agent -p`
 each tick, gated by `loopx quota should-run` — the same Codex-style CLI control
 plane.
 
-Install the LoopX surface rule for Cursor:
-
-```bash
-loopx slash-commands --install --surface cursor
-```
-
-This writes `~/.cursor/rules/loopx.mdc` — the tick protocol that instructs
-`cursor-agent` to shell out to `loopx` CLI subcommands for gating and writeback.
-
-Then connect and onboard the project:
+Install the LoopX surface rule for Cursor at the project level (where `cursor-agent -p` loads rules from):
 
 ```bash
 cd /path/to/your-project
-loopx agent-onboard --agent-type cursor-cli --project .
+loopx slash-commands --install --surface cursor --cursor-home $(pwd)/.cursor
+```
+
+This writes `$(pwd)/.cursor/rules/loopx.mdc` — the tick protocol that instructs
+`cursor-agent` to shell out to `loopx` CLI subcommands for gating and writeback —
+and installs the tick scripts at `$(pwd)/.cursor/bin/`.
+
+Then onboard the project and start the worker:
+
+```bash
+loopx agent-onboard --agent-type cursor-cli --project . --goal-id <goal_id> --agent-id <agent_id>
+loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id> --project . --cursor-home $(pwd)/.cursor
 ```
 
 The external tick driver invokes `cursor-agent -p <task_body>` per allowed tick.

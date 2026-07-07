@@ -8,6 +8,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..paths import global_registry_path, DEFAULT_RUNTIME_ROOT
+
 from ..host_loop_activation import (
     AgentTypeError,
     build_agent_type_catalog,
@@ -90,7 +92,7 @@ def register_agent_start_command(
         "--tick-interval",
         type=int,
         metavar="SECONDS",
-        help="Seconds between ticks for cursor-cli loop (default: 10).",
+        help="Seconds between ticks for cursor-cli loop (default: 60).",
     )
     parser.add_argument(
         "--cursor-home",
@@ -126,9 +128,30 @@ def _render_agent_start_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _resolve_global_registry(registry_path: Path | None) -> str:
+    """Return the path to use for LOOPX_GLOBAL_REGISTRY.
+
+    Precedence: explicit --registry arg > LOOPX_GLOBAL_REGISTRY env > LOOPX_REGISTRY env >
+    system global registry default.
+    """
+    if registry_path is not None:
+        return str(registry_path)
+    from_env = (
+        os.environ.get("LOOPX_GLOBAL_REGISTRY", "").strip()
+        or os.environ.get("LOOPX_REGISTRY", "").strip()
+    )
+    if from_env:
+        return from_env
+    default = global_registry_path(DEFAULT_RUNTIME_ROOT)
+    if default.exists():
+        return str(default)
+    return ""
+
+
 def handle_agent_start_command(
     args: argparse.Namespace,
     *,
+    registry_path: Path | None = None,
     output_format: FormatSelector,
     print_payload: PrintPayload,
 ) -> int | None:
@@ -153,6 +176,7 @@ def handle_agent_start_command(
             agent_id=agent_id,
             project=project,
             cursor_home=getattr(args, "cursor_home", None),
+            global_registry=_resolve_global_registry(registry_path),
             output_format=output_format,
             print_payload=print_payload,
         )
@@ -181,6 +205,7 @@ def _start_cursor_cli(
     agent_id: str,
     project: str,
     cursor_home: str | None = None,
+    global_registry: str = "",
     output_format: FormatSelector,
     print_payload: PrintPayload,
 ) -> int:
@@ -243,11 +268,6 @@ def _start_cursor_cli(
         }
         print_payload(payload, output_format(args), _render_agent_start_markdown)
         return 1
-
-    global_registry = (
-        os.environ.get("LOOPX_GLOBAL_REGISTRY", "").strip()
-        or os.environ.get("LOOPX_REGISTRY", "").strip()
-    )
 
     env = os.environ.copy()
     env["LOOPX_GOAL_ID"] = goal_id

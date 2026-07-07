@@ -433,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
 
     agent_start_result = handle_agent_start_command(
         args,
+        registry_path=registry_path,
         output_format=output_format,
         print_payload=print_payload,
     )

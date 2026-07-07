@@ -46,7 +46,7 @@ def register_starter_bootstrap_commands(subparsers: argparse._SubParsersAction) 
     )
     agent_onboard_parser.add_argument(
         "--agent-type",
-        help="Agent runtime type: codex-app, codex-cli, claude-code, manual, or other-agent.",
+        help="Agent runtime type: codex-app, codex-cli, claude-code, cursor-cli, manual, or other-agent.",
     )
     agent_onboard_parser.add_argument(
         "--list-agent-types",
@@ -221,7 +221,7 @@ def handle_agent_onboard_command(
         exc = AgentTypeError(
             value=None,
             reason="--agent-type is required unless --list-agent-types is used",
-            suggestions=["codex-app", "codex-cli", "claude-code", "manual", "other-agent"],
+            suggestions=["codex-app", "codex-cli", "claude-code", "cursor-cli", "manual", "other-agent"],
         )
         print_payload(exc.to_payload(), args.format, render_agent_onboarding_markdown)
         return 2

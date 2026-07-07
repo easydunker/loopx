@@ -470,9 +470,11 @@ before_spent_slots = spent_slots(quota_payload)
 # instructions (write todos, then execute); when todos exist it emits
 # execution instructions. This gives cursor-cli the same unified
 # planning + execution behaviour as the Codex TUI goal session.
+# Use the same global registry so heartbeat-prompt and quota read the same state.
 agent_arg = ['--agent-id', agent] if agent else []
+registry_args = ['--registry', global_registry] if global_registry else []
 hp = subprocess.run(
-    [loopx, '--format', 'json', 'heartbeat-prompt', '--thin',
+    [loopx, '--format', 'json', *registry_args, 'heartbeat-prompt', '--thin',
      '--goal-id', goal, *agent_arg],
     capture_output=True, text=True,
     cwd=project,
@@ -485,12 +487,25 @@ except Exception:
 task_body = hp_payload.get('task_body') if isinstance(hp_payload, dict) else None
 if not task_body:
     error = hp_payload.get('error', '') if isinstance(hp_payload, dict) else ''
+    hp_exit = hp.returncode
     print(
-        f'\n[LoopX cursor-cli tick] heartbeat-prompt returned no task_body'
-        f'{": " + error if error else ""}; cannot build tick prompt.\n',
+        f'\n[LoopX cursor-cli tick] heartbeat-prompt failed '
+        f'(exit {hp_exit})'
+        f'{": " + error if error else ""}; cannot build tick prompt. '
+        'This is a setup/config error — stopping.\n',
         flush=True,
     )
-    raise SystemExit(1)
+    raise SystemExit(2)
+
+import shutil as _shutil
+if not _shutil.which(cursor_agent_bin) and not Path(cursor_agent_bin).is_file():
+    print(
+        f'\n[LoopX cursor-cli tick] cursor-agent binary {cursor_agent_bin!r} not found. '
+        'Install Cursor CLI or set LOOPX_CURSOR_AGENT_BIN to the correct path. '
+        'This is a setup/config error — stopping.\n',
+        flush=True,
+    )
+    raise SystemExit(2)
 
 result = subprocess.run(
     [cursor_agent_bin, '-p', task_body, '--model', cursor_model, '--output-format', 'json'],
@@ -534,6 +549,20 @@ tick_worker = os.environ.get(
     'LOOPX_CURSOR_TICK_WORKER',
     str(Path(__file__).resolve().with_name('loopx-cursor-cli-tick-worker')),
 )
+_MANAGED_MARKER = '<!-- loopx-managed-slash-command:v1'
+_allow_unmanaged = os.environ.get('LOOPX_CURSOR_ALLOW_UNMANAGED_TICK_WORKER', '').strip() in {'1', 'true', 'yes'}
+try:
+    _tick_worker_content = Path(tick_worker).read_text(encoding='utf-8')
+except OSError:
+    _tick_worker_content = ''
+if _MANAGED_MARKER not in _tick_worker_content and not _allow_unmanaged:
+    print(
+        f'\n[LoopX cursor-cli loop] tick worker at {tick_worker!r} is not a LoopX-managed file '
+        '(missing managed marker). Re-run `loopx slash-commands --install --surface cursor` to '
+        'restore it. Set LOOPX_CURSOR_ALLOW_UNMANAGED_TICK_WORKER=1 to bypass (unsafe/debug only).\n',
+        flush=True,
+    )
+    raise SystemExit(2)
 tick_interval = int(os.environ.get('LOOPX_CURSOR_TICK_INTERVAL', '60'))
 pause_interval = int(os.environ.get('LOOPX_CURSOR_PAUSE_INTERVAL', '60'))
 max_ticks = int(os.environ.get('LOOPX_CURSOR_MAX_TICKS', '0')) or None
@@ -551,6 +580,7 @@ _global_registry = os.environ.get('LOOPX_GLOBAL_REGISTRY', '').strip()
 
 def _scheduler_hint_seconds() -> int | None:
     # Read recommended_interval_minutes from quota should-run scheduler_hint.
+    # LoopX publishes the interval under scheduler_hint.codex_app.recommended_interval_minutes.
     try:
         registry_args = ['--registry', _global_registry] if _global_registry else []
         r = subprocess.run(
@@ -560,8 +590,8 @@ def _scheduler_hint_seconds() -> int | None:
         )
         payload = json.loads(r.stdout) if r.stdout else {}
         hint = payload.get('scheduler_hint') if isinstance(payload, dict) else None
-        tui_hint = (hint or {}).get('codex_cli_tui') if isinstance(hint, dict) else None
-        minutes = (tui_hint or {}).get('recommended_interval_minutes') if isinstance(tui_hint, dict) else None
+        app_hint = (hint or {}).get('codex_app') if isinstance(hint, dict) else None
+        minutes = (app_hint or {}).get('recommended_interval_minutes') if isinstance(app_hint, dict) else None
         if minutes is not None:
             return max(10, int(float(minutes) * 60))
     except Exception:
