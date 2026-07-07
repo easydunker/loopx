@@ -76,6 +76,7 @@ from .bootstrap_connect import (
     handle_bootstrap_connect_command,
     register_bootstrap_connect_command,
 )
+from .agent_start import handle_agent_start_command, register_agent_start_command
 from .canary import handle_canary_command, register_canary_commands
 from .capability import handle_capability_command, register_capability_commands
 from .doctor import handle_doctor_command, register_doctor_command
@@ -165,6 +166,7 @@ from .version import handle_version_command, register_version_command
 from .worker_bridge import handle_worker_bridge_command, register_worker_bridge_commands
 
 __all__ = [
+    "handle_agent_start_command",
     "handle_agents_last_exam_command",
     "handle_agents_last_exam_baked_input_command",
     "handle_agents_last_exam_host_codex_command",
@@ -249,6 +251,7 @@ __all__ = [
     "register_benchmark_run_ledger_case_analysis_commands",
     "register_benchmark_run_ledger_maintenance_commands",
     "register_benchmark_run_ledger_parity_commands",
+    "register_agent_start_command",
     "register_bootstrap_connect_command",
     "register_canary_commands",
     "register_capability_commands",
