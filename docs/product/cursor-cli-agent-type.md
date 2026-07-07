@@ -18,3 +18,10 @@ owner-authorized pass-through contract for the project boundary.
 Use `CURSOR_HOME` when Cursor user files should be installed outside
 `~/.cursor`; `loopx agent-start --agent-type cursor-cli` resolves the same home
 when locating the LoopX-owned loop script.
+
+For `cursor-agent -p` headless use, install rules at the project level so
+`cursor-agent` loads them from `.cursor/rules/`:
+
+```bash
+loopx slash-commands --install --surface cursor --cursor-home $(pwd)/.cursor
+```

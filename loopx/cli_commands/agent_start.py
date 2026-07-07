@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -211,14 +212,21 @@ def _start_cursor_cli(
     if args.tick_interval:
         env["LOOPX_CURSOR_TICK_INTERVAL"] = str(args.tick_interval)
 
-    cmd_display = (
-        f"LOOPX_GOAL_ID={goal_id} "
-        f"LOOPX_AGENT_ID={agent_id} "
-        f"LOOPX_PROJECT={project} "
-        f"LOOPX_CURSOR_MODEL={model} "
-        + (f"LOOPX_CURSOR_MAX_TICKS={args.max_ticks} " if args.max_ticks else "")
-        + str(cursor_loop_script)
-    )
+    def _env(k: str, v: str) -> str:
+        return f"{k}={shlex.quote(v)}"
+
+    cmd_parts = [
+        _env("LOOPX_GOAL_ID", goal_id),
+        _env("LOOPX_AGENT_ID", agent_id),
+        _env("LOOPX_PROJECT", project),
+        _env("LOOPX_CURSOR_MODEL", model),
+    ]
+    if args.max_ticks:
+        cmd_parts.append(_env("LOOPX_CURSOR_MAX_TICKS", str(args.max_ticks)))
+    if args.tick_interval:
+        cmd_parts.append(_env("LOOPX_CURSOR_TICK_INTERVAL", str(args.tick_interval)))
+    cmd_parts.append(shlex.quote(str(cursor_loop_script)))
+    cmd_display = " ".join(cmd_parts)
 
     if args.dry_run:
         payload = {

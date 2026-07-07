@@ -387,7 +387,7 @@ role = (
 project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
 cursor_agent_bin = os.environ.get('LOOPX_CURSOR_AGENT_BIN', 'cursor-agent')
 cursor_model = os.environ.get('LOOPX_CURSOR_MODEL', '').strip()
-require_writeback = os.environ.get('LOOPX_CURSOR_REQUIRE_WRITEBACK', '1').strip().lower() not in {
+require_writeback = os.environ.get('LOOPX_CURSOR_REQUIRE_WRITEBACK', '0').strip().lower() not in {
     '0',
     'false',
     'no',
@@ -418,6 +418,7 @@ def run_quota_should_run():
         [loopx, '--format', 'json', 'quota', 'should-run',
          '--goal-id', goal, '--agent-id', agent],
         capture_output=True, text=True,
+        cwd=project,
     )
     try:
         payload = json.loads(result.stdout)
@@ -454,6 +455,7 @@ hp = subprocess.run(
     [loopx, '--format', 'json', 'heartbeat-prompt', '--thin',
      '--goal-id', goal, *agent_arg],
     capture_output=True, text=True,
+    cwd=project,
 )
 try:
     hp_payload = json.loads(hp.stdout)
@@ -482,9 +484,10 @@ if require_writeback:
     if post_quota_result.returncode != 0 or after_spent_slots <= before_spent_slots:
         print(
             '\n[LoopX cursor-cli tick] cursor-agent exited 0, but LoopX quota writeback '
-            'was not observed. The tick is not counted complete. Ensure the agent runs '
-            '`loopx todo complete ...` and `loopx quota spend-slot ... --execute`, or set '
-            'LOOPX_CURSOR_REQUIRE_WRITEBACK=0 for an explicit best-effort driver.\n',
+            '(spent_slots increase) was not observed. This is a best-effort proxy check. '
+            'Ensure the agent runs `loopx todo complete ...` and '
+            '`loopx quota spend-slot ... --execute`. '
+            'Disable this opt-in check with LOOPX_CURSOR_REQUIRE_WRITEBACK=0.\n',
             flush=True,
         )
         raise SystemExit(1)
@@ -493,7 +496,7 @@ sys.exit(result.returncode)
 
 
 CURSOR_CLI_LOOP_PY = r"""
-import os, subprocess, sys, time
+import json, os, shutil, subprocess, sys, time
 from pathlib import Path
 
 goal = os.environ.get('LOOPX_GOAL_ID', '').strip()
@@ -511,9 +514,34 @@ tick_worker = os.environ.get(
     'LOOPX_CURSOR_TICK_WORKER',
     str(Path(__file__).resolve().with_name('loopx-cursor-cli-tick-worker')),
 )
-tick_interval = int(os.environ.get('LOOPX_CURSOR_TICK_INTERVAL', '10'))
-pause_interval = int(os.environ.get('LOOPX_CURSOR_PAUSE_INTERVAL', '30'))
+tick_interval = int(os.environ.get('LOOPX_CURSOR_TICK_INTERVAL', '60'))
+pause_interval = int(os.environ.get('LOOPX_CURSOR_PAUSE_INTERVAL', '60'))
 max_ticks = int(os.environ.get('LOOPX_CURSOR_MAX_TICKS', '0')) or None
+
+# Resolve loopx binary for scheduler_hint reads.
+_loopx = os.environ.get('LOOPX_PANE_LOOPX') or str(
+    Path(project).expanduser() / '.local' / 'bin' / 'loopx'
+)
+if not Path(_loopx).exists():
+    _loopx = shutil.which('loopx') or _loopx
+
+def _scheduler_hint_seconds() -> int | None:
+    # Read recommended_interval_minutes from quota should-run scheduler_hint.
+    try:
+        r = subprocess.run(
+            [_loopx, '--format', 'json', 'quota', 'should-run',
+             '--goal-id', goal, '--agent-id', agent],
+            capture_output=True, text=True, cwd=project,
+        )
+        payload = json.loads(r.stdout) if r.stdout else {}
+        hint = payload.get('scheduler_hint') if isinstance(payload, dict) else None
+        tui_hint = (hint or {}).get('codex_cli_tui') if isinstance(hint, dict) else None
+        minutes = (tui_hint or {}).get('recommended_interval_minutes') if isinstance(tui_hint, dict) else None
+        if minutes is not None:
+            return max(10, int(float(minutes) * 60))
+    except Exception:
+        pass
+    return None
 
 print(
     f'\n[LoopX cursor-cli loop] starting — goal={goal} agent={agent}'
@@ -527,27 +555,30 @@ while True:
     result = subprocess.run([tick_worker], env=os.environ.copy())
     if result.returncode == 0:
         tick_count += 1
-        print(f'\n[LoopX cursor-cli loop] tick {tick_count} done; sleeping {tick_interval}s\n', flush=True)
+        sleep_s = _scheduler_hint_seconds() or tick_interval
+        print(f'\n[LoopX cursor-cli loop] tick {tick_count} done; sleeping {sleep_s}s\n', flush=True)
         if max_ticks and tick_count >= max_ticks:
             print(f'\n[LoopX cursor-cli loop] reached max_ticks={max_ticks}; stopping.\n', flush=True)
             raise SystemExit(0)
-        time.sleep(tick_interval)
+        time.sleep(sleep_s)
     elif result.returncode == 75:
+        sleep_s = _scheduler_hint_seconds() or pause_interval
         print(
-            f'\n[LoopX cursor-cli loop] quota paused; sleeping {pause_interval}s before retry.\n',
+            f'\n[LoopX cursor-cli loop] quota paused; sleeping {sleep_s}s before retry.\n',
             flush=True,
         )
-        time.sleep(pause_interval)
+        time.sleep(sleep_s)
     elif result.returncode == 2:
         print(f'\n[LoopX cursor-cli loop] tick worker exited with 2 (config error); stopping.\n', flush=True)
         raise SystemExit(2)
     else:
+        sleep_s = _scheduler_hint_seconds() or pause_interval
         print(
             f'\n[LoopX cursor-cli loop] tick worker exited {result.returncode} '
-            f'(quota paused or error); sleeping {pause_interval}s before retry.\n',
+            f'(error); sleeping {sleep_s}s before retry.\n',
             flush=True,
         )
-        time.sleep(pause_interval)
+        time.sleep(sleep_s)
 """
 
 

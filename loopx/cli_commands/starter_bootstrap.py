@@ -87,7 +87,7 @@ def register_starter_bootstrap_commands(subparsers: argparse._SubParsersAction) 
     bootstrap_command_pack_parser.add_argument(
         "--host-surface",
         default="chat-box",
-        choices=["chat-box", "codex-app", "codex-cli-tui", "claude-code", "shell", "http", "worker-bridge"],
+        choices=["chat-box", "codex-app", "codex-cli-tui", "claude-code", "cursor-cli", "shell", "http", "worker-bridge"],
         help="Host surface where the slash command pack will be exposed.",
     )
     bootstrap_command_pack_parser.add_argument(

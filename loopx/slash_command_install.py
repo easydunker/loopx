@@ -261,7 +261,7 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
                 [
                     "## Bounded delivery (one segment per tick)",
                     "",
-                    f"- Read `{cli_bin} status --project .` and `{cli_bin} todo claim ...` to understand the active task.",
+                    f"- Read `{cli_bin} status` and `{cli_bin} todo claim ...` to understand the active task.",
                     "- Do one concrete, bounded, public-safe delivery segment.",
                     f"- Write progress through `{cli_bin} todo update ...`.",
                 ]
@@ -302,8 +302,9 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
                     "```",
                     "",
                     "The loop re-invokes the tick worker every `LOOPX_CURSOR_TICK_INTERVAL` seconds",
-                    "(default 10s). When quota is paused it waits `LOOPX_CURSOR_PAUSE_INTERVAL`",
-                    "seconds (default 30s) before retrying. Set `LOOPX_CURSOR_MAX_TICKS` to limit",
+                    "(default 60s, or the scheduler_hint recommended_interval_minutes from quota).",
+                    "When quota is paused it waits `LOOPX_CURSOR_PAUSE_INTERVAL` seconds (default 60s)",
+                    "or the scheduler_hint, before retrying. Set `LOOPX_CURSOR_MAX_TICKS` to limit",
                     "the number of ticks (default: unlimited).",
                     "",
                     "The first tick is adaptive: if no todos exist yet, the heartbeat-prompt",
@@ -662,7 +663,7 @@ def install_slash_commands(
             "Codex does not currently support user-defined native top-level slash commands; use explicit skill invocation through `$loopx` or `/skills`.",
             "Only explicit LoopX command-facade skills are installed with agents/openai.yaml policy allow_implicit_invocation=false; richer workflow skills stay implicit.",
             "Claude Code discovers user skills from CLAUDE_HOME/skills and exposes each skill name as a slash command.",
-            "Cursor rules are written to CURSOR_HOME/rules/loopx.mdc; cursor-agent picks them up as a user-level tick protocol. Auto-approval flags are not passed by the LoopX-owned driver.",
+            "Cursor rules are written to CURSOR_HOME/rules/loopx.mdc; cursor-agent picks them up as a user-level tick protocol. For cursor-agent -p headless use, install at project level with --cursor-home $(pwd)/.cursor so rules are loaded from .cursor/rules/. Auto-approval flags are not passed by the LoopX-owned driver.",
             "Uninstall is fail-closed: it retires only files carrying the LoopX managed marker and leaves user-owned files in place.",
         ],
     }

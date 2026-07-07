@@ -377,7 +377,7 @@ def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, 
             ),
         },
         "activation_steps": [
-            "Install or refresh the Cursor CLI LoopX surface: `loopx slash-commands --install --surface cursor`.",
+            "Install or refresh the Cursor CLI LoopX surface: `loopx slash-commands --install --surface cursor`. For cursor-agent -p headless use, add `--cursor-home $(pwd)/.cursor` so rules install at the project level where cursor-agent loads them.",
             "This writes ~/.cursor/rules/loopx.mdc (tick protocol) and ~/.cursor/bin/loopx-cursor-cli-tick-worker (self-contained tick).",
             "Set env: export LOOPX_GOAL_ID=<id> LOOPX_AGENT_ID=<id> LOOPX_PROJECT=$(pwd)",
             "Set model: export LOOPX_CURSOR_MODEL=composer-2.5  # or gpt-5.3-codex-low for cheaper",
