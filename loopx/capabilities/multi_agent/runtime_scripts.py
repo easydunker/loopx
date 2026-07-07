@@ -387,6 +387,11 @@ role = (
 project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
 cursor_agent_bin = os.environ.get('LOOPX_CURSOR_AGENT_BIN', 'cursor-agent')
 cursor_model = os.environ.get('LOOPX_CURSOR_MODEL', '').strip()
+require_writeback = os.environ.get('LOOPX_CURSOR_REQUIRE_WRITEBACK', '1').strip().lower() not in {
+    '0',
+    'false',
+    'no',
+}
 _DEFAULT_MODEL = 'composer-2.5'
 _PAUSED_EXIT = 75
 if not cursor_model:
@@ -408,17 +413,36 @@ if not goal or not agent:
 
 print(f'\n[LoopX cursor-cli tick] goal={goal} agent={agent}\n', flush=True)
 
+def run_quota_should_run():
+    result = subprocess.run(
+        [loopx, '--format', 'json', 'quota', 'should-run',
+         '--goal-id', goal, '--agent-id', agent],
+        capture_output=True, text=True,
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except Exception:
+        payload = {}
+    return result, payload if isinstance(payload, dict) else {}
+
+def spent_slots(payload):
+    quota = payload.get('quota') if isinstance(payload.get('quota'), dict) else {}
+    try:
+        return int(quota.get('spent_slots') or 0)
+    except Exception:
+        return 0
+
 # Quota gate — the same loopx quota should-run seam used by all LoopX agents.
-quota_result = subprocess.run(
-    [loopx, '--format', 'markdown', 'quota', 'should-run',
-     '--goal-id', goal, '--agent-id', agent],
-)
-if quota_result.returncode != 0:
+quota_result, quota_payload = run_quota_should_run()
+if quota_result.returncode != 0 or quota_payload.get('should_run') is not True:
+    reason = quota_payload.get('reason') if isinstance(quota_payload, dict) else ''
     print(
-        '\n[LoopX cursor-cli tick] quota should-run=false; paused — no cursor-agent invocation.\n',
+        f'\n[LoopX cursor-cli tick] quota should-run=false'
+        f'{": " + str(reason) if reason else ""}; no cursor-agent invocation.\n',
         flush=True,
     )
     raise SystemExit(_PAUSED_EXIT)
+before_spent_slots = spent_slots(quota_payload)
 
 # Build the tick prompt from heartbeat-prompt, same as Codex.
 # heartbeat-prompt is adaptive: when no todos exist it emits goal-start
@@ -450,6 +474,20 @@ result = subprocess.run(
     [cursor_agent_bin, '-p', task_body, '--model', cursor_model, '--output-format', 'json'],
     cwd=project,
 )
+if result.returncode != 0:
+    sys.exit(result.returncode)
+if require_writeback:
+    post_quota_result, post_quota_payload = run_quota_should_run()
+    after_spent_slots = spent_slots(post_quota_payload)
+    if post_quota_result.returncode != 0 or after_spent_slots <= before_spent_slots:
+        print(
+            '\n[LoopX cursor-cli tick] cursor-agent exited 0, but LoopX quota writeback '
+            'was not observed. The tick is not counted complete. Ensure the agent runs '
+            '`loopx todo complete ...` and `loopx quota spend-slot ... --execute`, or set '
+            'LOOPX_CURSOR_REQUIRE_WRITEBACK=0 for an explicit best-effort driver.\n',
+            flush=True,
+        )
+        raise SystemExit(1)
 sys.exit(result.returncode)
 """
 

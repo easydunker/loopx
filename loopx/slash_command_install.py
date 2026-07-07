@@ -273,11 +273,12 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
                     "After a successfully completed delivery segment:",
                     "",
                     "```bash",
-                    f"{cli_bin} todo complete --todo-id <todo_id>",
-                    f"{cli_bin} quota spend-slot --goal-id <goal_id> --agent-id <agent_id>",
+                    f"{cli_bin} todo complete --goal-id <goal_id> --todo-id <todo_id> --claimed-by <agent_id> --evidence \"<public-safe evidence>\"",
+                    f"{cli_bin} quota spend-slot --goal-id <goal_id> --slots 1 --source heartbeat --execute --agent-id <agent_id>",
                     "```",
                     "",
                     "Only spend a slot on validated, bounded completion — not on partial progress.",
+                    "The LoopX tick worker verifies that quota accounting changed before it counts the tick complete.",
                 ]
             ),
             "\n".join(
@@ -330,13 +331,13 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
             ),
             "\n".join(
                 [
-                    "## Auto-approval flags (opt-in, not default)",
+                    "## Auto-approval flags (not passed by LoopX)",
                     "",
                     "`cursor-agent` flags `--force`, `--yolo`, and `--approve-mcps` grant unsandboxed "
-                    "write and execution auto-approval. **Do not set these by default.** "
-                    "They are opt-in and must be authorized by the project owner with an explicit "
-                    "safety acknowledgment. The default `cursor-agent -p <task_body>` is the safe "
-                    "conservative baseline.",
+                    "write and execution auto-approval. The LoopX-owned driver does not pass these "
+                    "flags. Use direct Cursor CLI outside `loopx agent-start` until LoopX exposes an "
+                    "explicit owner-authorized pass-through contract. The default "
+                    "`cursor-agent -p <task_body>` is the safe conservative baseline.",
                 ]
             ),
             "Keep public/private boundaries intact and do not perform external writes unless the active LoopX state or owner explicitly authorizes them.",
@@ -574,8 +575,8 @@ def install_slash_commands(
                 "invoke_as": [],
                 "note": (
                     "Tick protocol for cursor-agent. "
-                    "Auto-approval flags (--force/--yolo/--approve-mcps) are documented as "
-                    "opt-in with a safety warning; not enabled by default."
+                    "Auto-approval flags (--force/--yolo/--approve-mcps) are not passed by the "
+                    "LoopX-owned driver."
                 ),
             }
         )
@@ -661,7 +662,7 @@ def install_slash_commands(
             "Codex does not currently support user-defined native top-level slash commands; use explicit skill invocation through `$loopx` or `/skills`.",
             "Only explicit LoopX command-facade skills are installed with agents/openai.yaml policy allow_implicit_invocation=false; richer workflow skills stay implicit.",
             "Claude Code discovers user skills from CLAUDE_HOME/skills and exposes each skill name as a slash command.",
-            "Cursor rules are written to CURSOR_HOME/rules/loopx.mdc; cursor-agent picks them up as a user-level tick protocol. Auto-approval flags are opt-in, not the default.",
+            "Cursor rules are written to CURSOR_HOME/rules/loopx.mdc; cursor-agent picks them up as a user-level tick protocol. Auto-approval flags are not passed by the LoopX-owned driver.",
             "Uninstall is fail-closed: it retires only files carrying the LoopX managed marker and leaves user-owned files in place.",
         ],
     }

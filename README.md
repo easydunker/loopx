@@ -304,10 +304,10 @@ loopx agent-onboard --agent-type cursor-cli --project .
 ```
 
 The external tick driver invokes `cursor-agent -p <task_body>` per allowed tick.
-The default invocation is conservative. To enable unsandboxed write/exec
-auto-approval, pass `--force`, `--yolo`, or `--approve-mcps` as an **explicit
-opt-in** with your own safety acknowledgment — these flags are not set by
-default.
+The default invocation is conservative and does not pass Cursor auto-approval
+flags such as `--force`, `--yolo`, or `--approve-mcps`. Use direct Cursor CLI
+outside `loopx agent-start` for those flags until LoopX exposes an explicit
+owner-authorized pass-through contract.
 
 ### Other Agents And Manual Shell
 

@@ -10,9 +10,10 @@ The contract is intentionally narrow:
 - When quota allows work, the driver builds a thin `heartbeat-prompt` task body and invokes `cursor-agent -p <task_body>`.
 - Writeback remains a LoopX control-plane responsibility through todo, evidence, and quota commands.
 
-The default Cursor invocation is conservative. Auto-approval flags such as
-`--force`, `--yolo`, and `--approve-mcps` are opt-in and require explicit owner
-authorization for the project boundary.
+The default Cursor invocation is conservative. The LoopX-owned driver does not
+pass auto-approval flags such as `--force`, `--yolo`, or `--approve-mcps`. Use
+direct Cursor CLI outside `loopx agent-start` until LoopX exposes an explicit
+owner-authorized pass-through contract for the project boundary.
 
 Use `CURSOR_HOME` when Cursor user files should be installed outside
 `~/.cursor`; `loopx agent-start --agent-type cursor-cli` resolves the same home

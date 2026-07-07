@@ -80,6 +80,12 @@ def main() -> int:
     assert "quota" in CURSOR_CLI_TICK_WORKER_PY and "should-run" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must embed the quota should-run gate"
     )
+    assert "'--format', 'json', 'quota', 'should-run'" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must inspect the quota should-run JSON payload"
+    )
+    assert "quota_payload.get('should_run') is not True" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must gate on should_run, not command success"
+    )
     assert "_PAUSED_EXIT = 75" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must distinguish paused quota from completed ticks"
     )
@@ -94,6 +100,12 @@ def main() -> int:
     )
     assert "Path(__file__).resolve().with_name('loopx-cursor-cli-tick-worker')" in CURSOR_CLI_LOOP_PY, (
         "loop script must default to the sibling worker installed beside it"
+    )
+    assert "LOOPX_CURSOR_REQUIRE_WRITEBACK" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must expose an explicit opt-out for best-effort writeback verification"
+    )
+    assert "after_spent_slots <= before_spent_slots" in CURSOR_CLI_TICK_WORKER_PY, (
+        "tick worker must verify quota accounting before counting completion"
     )
     assert "heartbeat-prompt" in CURSOR_CLI_TICK_WORKER_PY, (
         "tick worker must use heartbeat-prompt as the adaptive prompt source"

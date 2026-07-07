@@ -383,7 +383,7 @@ def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, 
             "Set model: export LOOPX_CURSOR_MODEL=composer-2.5  # or gpt-5.3-codex-low for cheaper",
             "Run one tick: ~/.cursor/bin/loopx-cursor-cli-tick-worker",
             "The tick worker gates via loopx quota should-run, then invokes cursor-agent -p per allowed tick.",
-            "Auto-approval flags (--force / --approve-mcps) are opt-in with an explicit safety warning; do not set them by default.",
+            "Auto-approval flags (--force / --yolo / --approve-mcps) are not passed by the LoopX-owned driver; use direct Cursor CLI outside loopx agent-start until an owner-authorized pass-through exists.",
         ],
         "success_criteria": [
             "The LoopX-owned tick worker (loopx-cursor-cli-tick-worker) is installed and executable.",
