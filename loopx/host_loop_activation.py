@@ -11,7 +11,7 @@ from .project_prompt import (
 SCHEMA_VERSION = "loopx_host_loop_activation_v1"
 AGENT_TYPE_CATALOG_SCHEMA_VERSION = "loopx_agent_type_catalog_v0"
 
-SUPPORTED_AGENT_TYPES = ["codex-app", "codex-cli", "claude-code", "manual", "other-agent"]
+SUPPORTED_AGENT_TYPES = ["codex-app", "codex-cli", "claude-code", "cursor-cli", "manual", "other-agent"]
 
 AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
     "codex-app": {
@@ -38,6 +38,19 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
         "host_loop": "native /loop gated by LoopX",
         "entry": "/loopx <task> then /loop",
         "accepted_inputs": ["claude-code", "claude_code", "claude code", "cc"],
+    },
+    "cursor-cli": {
+        "display_name": "Cursor CLI",
+        "host_loop": "external loop driver re-invoking cursor-agent -p, gated by LoopX CLI should_run",
+        "entry": "loopx slash-commands --install --surface cursor, then the LoopX-owned tick driver",
+        "accepted_inputs": [
+            "cursor-cli",
+            "cursor_cli",
+            "cursor cli",
+            "cursor-agent",
+            "cursor agent",
+            "cursor",
+        ],
     },
     "manual": {
         "display_name": "Manual shell / external scheduler",
@@ -96,6 +109,7 @@ HOST_SURFACE_TO_AGENT_TYPE = {
     "chat-box": "codex-app",
     "codex-cli-tui": "codex-cli",
     "claude-code": "claude-code",
+    "cursor-cli": "cursor-cli",
     "shell": "manual",
     "http": "other-agent",
     "worker-bridge": "other-agent",
@@ -215,6 +229,7 @@ def _heartbeat_commands(
         "codex-app": "Codex App heartbeat automation",
         "codex-cli": "Codex CLI /goal visible TUI loop",
         "claude-code": "Claude Code native /loop gated by LoopX",
+        "cursor-cli": "Cursor CLI external loop driver re-invoking cursor-agent -p, gated by LoopX",
         "manual": "External scheduler or manual shell LoopX poll",
         "other-agent": "Custom agent host loop gated by LoopX",
     }
@@ -319,6 +334,63 @@ def _claude_code_activation(commands: dict[str, str], cli_bin: str) -> dict[str,
     }
 
 
+def _cursor_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]:
+    return {
+        "host_surface": "cursor_cli_external_loop_driver",
+        "entry_command_hint": "loopx slash-commands --install --surface cursor, then start the LoopX-owned tick driver",
+        "activation_method": "install_surface_then_run_external_tick_driver",
+        "activation_input_command": commands["heartbeat_prompt_json"],
+        "setup_command": f"{cli_bin} slash-commands --install --surface cursor",
+        "native_goal_api_present": False,
+        "native_loop_runtime_present": False,
+        "control_plane": "loopx_cli_subcommands",
+        "tick_driver": {
+            "seam": "loopx_cli_quota_should_run",
+            "tick_script": "$CURSOR_HOME/bin/loopx-cursor-cli-tick-worker",
+            "tick_installed_by": f"{cli_bin} slash-commands --install --surface cursor --cursor-home $(pwd)/.cursor",
+            "tick_invocation": "$CURSOR_HOME/bin/loopx-cursor-cli-tick-worker",
+            "pane_a2a_compat": "LOOPX_PANE_WORKER_TURN=$CURSOR_HOME/bin/loopx-cursor-cli-tick-worker $LOOPX_PANE_A2A_TICK",
+            "model_env_var": "LOOPX_CURSOR_MODEL",
+            "model_default": "composer-2.5",
+            "model_note": (
+                "Set LOOPX_CURSOR_MODEL to control cost per tick. "
+                "Defaults to composer-2.5 with a warning if unset. "
+                "Thinking/high models cost significantly more — set explicitly. "
+                "Run cursor-agent --list-models for available options."
+            ),
+            "note": (
+                "Self-contained tick: gates via loopx quota should-run, then calls "
+                "loopx heartbeat-prompt --thin to get the adaptive task_body (goal-start "
+                "instructions when no todos exist, execution instructions otherwise), "
+                "then invokes cursor-agent -p <task_body> --model $LOOPX_CURSOR_MODEL. "
+                "Same unified planning+execution behaviour as the Codex TUI goal session."
+            ),
+        },
+        "host_mutation": {
+            "owner": "Cursor CLI",
+            "host_command": "cursor-agent -p <task_body>",
+            "cli_can_mutate_directly": False,
+            "missing_host_tool_gate": (
+                "No native Cursor CLI loop runtime present; surface a pasteable "
+                "external-loop gate showing the cursor-agent invocation and the "
+                "`loopx quota should-run` gate command."
+            ),
+        },
+        "activation_steps": [
+            "Install the Cursor CLI LoopX surface at the project level: `loopx slash-commands --install --surface cursor --cursor-home $(pwd)/.cursor`. This installs rules where cursor-agent -p loads them.",
+            "This writes $(pwd)/.cursor/rules/loopx.mdc (tick protocol) and $(pwd)/.cursor/bin/loopx-cursor-cli-{loop,tick-worker} (self-contained tick scripts).",
+            "Start the worker: `loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id> --project . --cursor-home $(pwd)/.cursor`",
+            "The tick worker gates via loopx quota should-run, then invokes cursor-agent -p per allowed tick.",
+            "Auto-approval flags (--force / --yolo / --approve-mcps) are not passed by the LoopX-owned driver; use direct Cursor CLI outside loopx agent-start until an owner-authorized pass-through exists.",
+        ],
+        "success_criteria": [
+            "The LoopX-owned tick worker (loopx-cursor-cli-tick-worker) is installed and executable.",
+            "Each tick invocation starts from `loopx quota should-run` before invoking cursor-agent.",
+            "Writeback uses `loopx todo complete` and `loopx quota spend-slot` after validated delivery.",
+        ],
+    }
+
+
 def _manual_activation(commands: dict[str, str]) -> dict[str, Any]:
     return {
         "host_surface": "external_scheduler_or_manual_shell",
@@ -365,6 +437,8 @@ def build_host_loop_activation_packet(
         surface = _codex_cli_activation(commands)
     elif canonical == "claude-code":
         surface = _claude_code_activation(commands, cli_bin)
+    elif canonical == "cursor-cli":
+        surface = _cursor_cli_activation(commands, cli_bin)
     else:
         surface = _manual_activation(commands)
         if canonical == "other-agent":

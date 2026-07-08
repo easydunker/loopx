@@ -83,6 +83,14 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Use installed slash skills for `/loopx`; enable the adapter only when native `/loop` should be gated by LoopX.",
             },
             {
+                "command": "Cursor CLI external loop driver",
+                "purpose": "Install the surface, then use `loopx agent-start --agent-type cursor-cli` to start the LoopX-owned tick driver.",
+            },
+            {
+                "command": "loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id> --project . --cursor-home $(pwd)/.cursor",
+                "purpose": "Start the Cursor CLI LoopX external tick driver for a goal.",
+            },
+            {
                 "command": "Other agent or shell",
                 "purpose": "Use a CLI, task, automation, heartbeat, or scheduler hook; otherwise drive LoopX manually.",
             },
@@ -107,6 +115,14 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             {
                 "command": "loopx codex-cli-visible-attach-acceptance",
                 "purpose": "Check public-safe visible Codex CLI attach evidence.",
+            },
+            {
+                "command": "loopx agent-onboard --agent-type cursor-cli --project .",
+                "purpose": "Generate the Cursor CLI host-loop activation packet with concrete start commands.",
+            },
+            {
+                "command": "loopx slash-commands --install --surface cursor --cursor-home $(pwd)/.cursor",
+                "purpose": "Install the Cursor CLI LoopX surface (rules + loop scripts) at project level.",
             },
             {"command": "loopx heartbeat-prompt", "purpose": "Generate a guarded heartbeat automation body."},
             {"command": "loopx upgrade-plan", "purpose": "Plan default heartbeat upgrade propagation."},
@@ -192,6 +208,7 @@ def render_concise_help(program: str = "loopx") -> str:
             "  Codex App      use /loopx <goal>; let the app set the heartbeat automation.",
             "  Codex CLI      keep visible TUI; run loopx codex-cli-bootstrap-message.",
             "  Claude Code    use installed /loopx skills; adapter only for gated native /loop.",
+            "  Cursor CLI     install surface, then: loopx agent-start --agent-type cursor-cli ...",
             "  Other agents   need a CLI/task/automation/loop hook, or run LoopX manually.",
             "",
             "Global options: --registry PATH   --runtime-root PATH   --format markdown|json",

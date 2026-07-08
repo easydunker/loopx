@@ -91,6 +91,9 @@ runtime contract, benchmark route, or launch draft.
   LoopX-native contract for a Claude Code implementation plus Codex review demo
   that maps implementer, reviewer, verifier, gates, evidence, and handoff onto
   normal LoopX todos and review packets.
+- [Cursor CLI agent type](cursor-cli-agent-type.md): honest-contract catalog
+  entry for `cursor-cli` — no native loop runtime, Codex-style CLI control
+  plane, LoopX-owned external tick driver.
 - [Codex CLI TUI continuation priority](codex-cli-tui-continuation-priority.md):
   the current scheduling guard that keeps same-open-TUI continuation ahead of
   frontstage/showcase polish when both are runnable.

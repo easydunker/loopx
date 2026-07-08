@@ -385,6 +385,338 @@ tick_target.chmod(0o700)
 """
 
 
+CURSOR_CLI_TICK_WORKER_PY = r"""
+import json, os, subprocess, sys
+from pathlib import Path
+
+loopx = os.environ.get('LOOPX_PANE_LOOPX') or str(
+    Path(os.environ.get('LOOPX_PROJECT', '.')).expanduser() / '.local' / 'bin' / 'loopx'
+)
+if not Path(loopx).exists():
+    import shutil
+    loopx = shutil.which('loopx') or loopx
+goal = os.environ.get('LOOPX_GOAL_ID', '').strip()
+agent = os.environ.get('LOOPX_AGENT_ID', '').strip()
+role = (
+    os.environ.get('LOOPX_ROLE_ID', '').strip()
+    or os.environ.get('LOOPX_LANE_ID', '').strip()
+    or agent
+)
+project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
+cursor_agent_bin = os.environ.get('LOOPX_CURSOR_AGENT_BIN', 'cursor-agent')
+cursor_model = os.environ.get('LOOPX_CURSOR_MODEL', '').strip()
+# Shared global registry for quota should-run/spend: sees the same operator gates and
+# quota state as dashboards. Set LOOPX_GLOBAL_REGISTRY to override.
+global_registry = os.environ.get('LOOPX_GLOBAL_REGISTRY', '').strip()
+# Writeback verification is on by default. Set LOOPX_CURSOR_REQUIRE_WRITEBACK=0 to opt out.
+require_writeback = os.environ.get('LOOPX_CURSOR_REQUIRE_WRITEBACK', '1').strip().lower() not in {
+    '0',
+    'false',
+    'no',
+}
+_DEFAULT_MODEL = 'composer-2.5'
+_PAUSED_EXIT = 75
+if not cursor_model:
+    print(
+        f'\n[LoopX cursor-cli tick] LOOPX_CURSOR_MODEL not set; '
+        f'defaulting to {_DEFAULT_MODEL!r}. '
+        f'Set LOOPX_CURSOR_MODEL to control cost '
+        f'(run cursor-agent --list-models for options).\n',
+        flush=True,
+    )
+    cursor_model = _DEFAULT_MODEL
+
+if not goal or not agent:
+    print(
+        '\n[LoopX cursor-cli tick]\nmissing LOOPX_GOAL_ID or LOOPX_AGENT_ID\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+
+print(f'\n[LoopX cursor-cli tick] goal={goal} agent={agent}\n', flush=True)
+
+def run_quota_should_run():
+    registry_args = ['--registry', global_registry] if global_registry else []
+    try:
+        result = subprocess.run(
+            [loopx, '--format', 'json', *registry_args, 'quota', 'should-run',
+             '--goal-id', goal, '--agent-id', agent],
+            capture_output=True, text=True,
+            cwd=project,
+        )
+    except OSError as exc:
+        print(
+            f'\n[LoopX cursor-cli tick] failed to launch loopx for quota check: {exc}; stopping.\n',
+            flush=True,
+        )
+        raise SystemExit(2)
+    try:
+        payload = json.loads(result.stdout)
+    except Exception:
+        payload = {}
+    return result, payload if isinstance(payload, dict) else {}
+
+def spent_slots(payload):
+    quota = payload.get('quota') if isinstance(payload.get('quota'), dict) else {}
+    try:
+        return int(quota.get('spent_slots') or 0)
+    except Exception:
+        return 0
+
+# Quota gate — the same loopx quota should-run seam used by all LoopX agents.
+quota_result, quota_payload = run_quota_should_run()
+if quota_result.returncode != 0:
+    # Any non-zero exit is a command/config failure (missing goal, bad registry, parse error).
+    # Do not treat this as a pause decision — stop so the operator sees the actionable error.
+    reason = (
+        (quota_payload.get('error') or quota_payload.get('status') or quota_payload.get('reason') or '')
+        if quota_payload else ''
+    )
+    print(
+        f'\n[LoopX cursor-cli tick] quota should-run command failed '
+        f'(exit {quota_result.returncode})'
+        f'{": " + str(reason) if reason else ""}; stopping.\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+elif quota_payload.get('should_run') is not True:
+    # Command succeeded (exit 0) but quota decided not to run — intentional pause.
+    reason = quota_payload.get('reason', '')
+    print(
+        f'\n[LoopX cursor-cli tick] quota should-run=false'
+        f'{": " + str(reason) if reason else ""}; no cursor-agent invocation.\n',
+        flush=True,
+    )
+    raise SystemExit(_PAUSED_EXIT)
+before_spent_slots = spent_slots(quota_payload)
+
+# Build the tick prompt from heartbeat-prompt, same as Codex.
+# heartbeat-prompt is adaptive: when no todos exist it emits goal-start
+# instructions (write todos, then execute); when todos exist it emits
+# execution instructions. This gives cursor-cli the same unified
+# planning + execution behaviour as the Codex TUI goal session.
+# Use the same global registry so heartbeat-prompt and quota read the same state.
+agent_arg = ['--agent-id', agent] if agent else []
+registry_args = ['--registry', global_registry] if global_registry else []
+try:
+    hp = subprocess.run(
+        [loopx, '--format', 'json', *registry_args, 'heartbeat-prompt', '--thin',
+         '--goal-id', goal, *agent_arg],
+        capture_output=True, text=True,
+        cwd=project,
+    )
+except OSError as exc:
+    print(
+        f'\n[LoopX cursor-cli tick] failed to launch loopx for heartbeat-prompt: {exc}; stopping.\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+try:
+    hp_payload = json.loads(hp.stdout)
+except Exception:
+    hp_payload = {}
+
+task_body = hp_payload.get('task_body') if isinstance(hp_payload, dict) else None
+if not task_body:
+    error = hp_payload.get('error', '') if isinstance(hp_payload, dict) else ''
+    hp_exit = hp.returncode
+    print(
+        f'\n[LoopX cursor-cli tick] heartbeat-prompt failed '
+        f'(exit {hp_exit})'
+        f'{": " + error if error else ""}; cannot build tick prompt. '
+        'This is a setup/config error — stopping.\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+
+import shutil as _shutil
+if not _shutil.which(cursor_agent_bin) and not Path(cursor_agent_bin).is_file():
+    print(
+        f'\n[LoopX cursor-cli tick] cursor-agent binary {cursor_agent_bin!r} not found. '
+        'Install Cursor CLI or set LOOPX_CURSOR_AGENT_BIN to the correct path. '
+        'This is a setup/config error — stopping.\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+
+try:
+    result = subprocess.run(
+        [cursor_agent_bin, '-p', task_body, '--model', cursor_model, '--output-format', 'json'],
+        cwd=project,
+    )
+except OSError as exc:
+    print(
+        f'\n[LoopX cursor-cli tick] failed to launch cursor-agent: {exc}; stopping.\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+if result.returncode != 0:
+    sys.exit(result.returncode)
+if require_writeback:
+    post_quota_result, post_quota_payload = run_quota_should_run()
+    after_spent_slots = spent_slots(post_quota_payload)
+    if post_quota_result.returncode != 0 or after_spent_slots <= before_spent_slots:
+        print(
+            '\n[LoopX cursor-cli tick] cursor-agent exited 0, but LoopX quota writeback '
+            '(spent_slots increase) was not observed. This is a best-effort proxy check. '
+            'Ensure the agent runs `loopx todo complete ...` and '
+            '`loopx quota spend-slot ... --execute`. '
+            'Disable this check with LOOPX_CURSOR_REQUIRE_WRITEBACK=0.\n',
+            flush=True,
+        )
+        raise SystemExit(3)
+sys.exit(result.returncode)
+"""
+
+
+CURSOR_CLI_LOOP_PY = r"""
+import json, os, shutil, subprocess, sys, time
+from pathlib import Path
+
+goal = os.environ.get('LOOPX_GOAL_ID', '').strip()
+agent = os.environ.get('LOOPX_AGENT_ID', '').strip()
+project = os.environ.get('LOOPX_PROJECT', '.').strip() or '.'
+
+if not goal or not agent:
+    print(
+        '\n[LoopX cursor-cli loop]\nmissing LOOPX_GOAL_ID or LOOPX_AGENT_ID\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+
+tick_worker = os.environ.get(
+    'LOOPX_CURSOR_TICK_WORKER',
+    str(Path(__file__).resolve().with_name('loopx-cursor-cli-tick-worker')),
+)
+_MANAGED_MARKER = '<!-- loopx-managed-slash-command:v1'
+_allow_unmanaged = os.environ.get('LOOPX_CURSOR_ALLOW_UNMANAGED_TICK_WORKER', '').strip() in {'1', 'true', 'yes'}
+try:
+    _tick_worker_content = Path(tick_worker).read_text(encoding='utf-8')
+except OSError:
+    _tick_worker_content = ''
+if _MANAGED_MARKER not in _tick_worker_content and not _allow_unmanaged:
+    print(
+        f'\n[LoopX cursor-cli loop] tick worker at {tick_worker!r} is not a LoopX-managed file '
+        '(missing managed marker). Re-run `loopx slash-commands --install --surface cursor` to '
+        'restore it. Set LOOPX_CURSOR_ALLOW_UNMANAGED_TICK_WORKER=1 to bypass (unsafe/debug only).\n',
+        flush=True,
+    )
+    raise SystemExit(2)
+def _parse_env_int(key: str, default: int, min_value: int = 0) -> int:
+    raw = os.environ.get(key, '').strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        print(
+            f'\n[LoopX cursor-cli loop] {key}={raw!r} is not a valid integer; stopping.\n',
+            flush=True,
+        )
+        raise SystemExit(2)
+    if value < min_value:
+        print(
+            f'\n[LoopX cursor-cli loop] {key}={value} must be >= {min_value}; stopping.\n',
+            flush=True,
+        )
+        raise SystemExit(2)
+    return value
+
+tick_interval = _parse_env_int('LOOPX_CURSOR_TICK_INTERVAL', 60, min_value=1)
+pause_interval = _parse_env_int('LOOPX_CURSOR_PAUSE_INTERVAL', 60, min_value=1)
+max_ticks = _parse_env_int('LOOPX_CURSOR_MAX_TICKS', 0, min_value=0) or None
+
+# Resolve loopx binary for scheduler_hint reads.
+_loopx = os.environ.get('LOOPX_PANE_LOOPX') or str(
+    Path(project).expanduser() / '.local' / 'bin' / 'loopx'
+)
+if not Path(_loopx).exists():
+    _loopx = shutil.which('loopx') or _loopx
+
+# Use shared global registry for scheduler hints so they see the same quota
+# state as dashboards and the tick worker. Passed through from agent-start.
+_global_registry = os.environ.get('LOOPX_GLOBAL_REGISTRY', '').strip()
+
+def _scheduler_hint() -> tuple:
+    # Returns (interval_seconds: int | None, should_stop: bool).
+    # Reads scheduler_hint from quota should-run:
+    #   - interval from codex_app.recommended_interval_minutes (proxy for local scheduler rate)
+    #   - stop signal from unchanged_poll.after_limits.local_scheduler == "stop_tick_loop"
+    try:
+        registry_args = ['--registry', _global_registry] if _global_registry else []
+        r = subprocess.run(
+            [_loopx, '--format', 'json', *registry_args, 'quota', 'should-run',
+             '--goal-id', goal, '--agent-id', agent],
+            capture_output=True, text=True, cwd=project,
+        )
+        payload = json.loads(r.stdout) if r.stdout else {}
+        hint = payload.get('scheduler_hint') if isinstance(payload, dict) else None
+        if not isinstance(hint, dict):
+            return None, False
+        # Check local scheduler stop signal (hot path, always present in should-run output).
+        unchanged_poll = hint.get('unchanged_poll')
+        after_limits = (unchanged_poll or {}).get('after_limits') if isinstance(unchanged_poll, dict) else None
+        local_after = (after_limits or {}).get('local_scheduler') if isinstance(after_limits, dict) else None
+        should_stop = local_after == 'stop_tick_loop'
+        # Read interval from codex_app (LoopX publishes this for all local schedulers).
+        app_hint = hint.get('codex_app')
+        minutes = (app_hint or {}).get('recommended_interval_minutes') if isinstance(app_hint, dict) else None
+        interval = max(10, int(float(minutes) * 60)) if minutes is not None else None
+        return interval, should_stop
+    except Exception:
+        return None, False
+
+print(
+    f'\n[LoopX cursor-cli loop] starting — goal={goal} agent={agent}'
+    f' tick_interval={tick_interval}s pause_interval={pause_interval}s'
+    f' max_ticks={max_ticks or "unlimited"}\n',
+    flush=True,
+)
+
+tick_count = 0
+while True:
+    result = subprocess.run([tick_worker], env=os.environ.copy())
+    if result.returncode == 0:
+        tick_count += 1
+        hint_s, hint_stop = _scheduler_hint()
+        if hint_stop:
+            print(f'\n[LoopX cursor-cli loop] scheduler stop_tick_loop after tick {tick_count}; stopping.\n', flush=True)
+            raise SystemExit(0)
+        sleep_s = hint_s or tick_interval
+        print(f'\n[LoopX cursor-cli loop] tick {tick_count} done; sleeping {sleep_s}s\n', flush=True)
+        if max_ticks and tick_count >= max_ticks:
+            print(f'\n[LoopX cursor-cli loop] reached max_ticks={max_ticks}; stopping.\n', flush=True)
+            raise SystemExit(0)
+        time.sleep(sleep_s)
+    elif result.returncode == 75:
+        hint_s, hint_stop = _scheduler_hint()
+        if hint_stop:
+            print(f'\n[LoopX cursor-cli loop] scheduler stop_tick_loop while paused; stopping.\n', flush=True)
+            raise SystemExit(0)
+        sleep_s = hint_s or pause_interval
+        print(
+            f'\n[LoopX cursor-cli loop] quota paused; sleeping {sleep_s}s before retry.\n',
+            flush=True,
+        )
+        time.sleep(sleep_s)
+    elif result.returncode == 2:
+        print(f'\n[LoopX cursor-cli loop] tick worker exited with 2 (config error); stopping.\n', flush=True)
+        raise SystemExit(2)
+    elif result.returncode == 3:
+        print(f'\n[LoopX cursor-cli loop] tick worker exited with 3 (writeback failure); stopping.\n', flush=True)
+        raise SystemExit(1)
+    else:
+        hint_s, _ = _scheduler_hint()
+        sleep_s = hint_s or pause_interval
+        print(
+            f'\n[LoopX cursor-cli loop] tick worker exited {result.returncode} '
+            f'(error); sleeping {sleep_s}s before retry.\n',
+            flush=True,
+        )
+        time.sleep(sleep_s)
+"""
+
+
 CODEX_TUI_EXEC_PY = r"""
 import json
 import os

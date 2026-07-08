@@ -50,7 +50,7 @@ def register_slash_commands_command(
     parser.add_argument(
         "--surface",
         action="append",
-        choices=["all", "codex", "codex-cli", "codex-app", "codex-ide", "claude-code"],
+        choices=["all", "codex", "codex-cli", "codex-app", "codex-ide", "cursor", "cursor-cli", "claude-code"],
         help=(
             "Host surface to install. Repeatable. Defaults to all "
             "(Codex explicit skills plus Claude Code skills)."
@@ -63,6 +63,14 @@ def register_slash_commands_command(
     parser.add_argument(
         "--claude-home",
         help="Claude Code home for skill installation. Defaults to CLAUDE_HOME or ~/.claude.",
+    )
+    parser.add_argument(
+        "--cursor-home",
+        help=(
+            "Cursor home for skill installation. Defaults to CURSOR_HOME or ~/.cursor. "
+            "For cursor-agent headless use, pass --cursor-home $(pwd)/.cursor to install "
+            "rules at the project level where cursor-agent -p loads them."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -88,6 +96,7 @@ def handle_slash_commands_command(
             include_legacy_aliases=not bool(args.no_legacy_aliases),
             codex_home=args.codex_home,
             claude_home=args.claude_home,
+            cursor_home=args.cursor_home,
         )
         print_payload(payload, output_format(args), render_slash_command_install_markdown)
         return 0

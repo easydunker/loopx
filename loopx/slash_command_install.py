@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .slash_commands import build_slash_command_catalog
+from .capabilities.multi_agent.runtime_scripts import CURSOR_CLI_LOOP_PY, CURSOR_CLI_TICK_WORKER_PY
 
 
 SCHEMA_VERSION = "loopx_slash_command_install_v0"
@@ -87,9 +88,9 @@ def _command_prompt_specs(*, cli_bin: str, include_legacy_aliases: bool) -> list
                 "Visible command arguments: `$ARGUMENTS`.",
                 f"If arguments are present, preserve them as the task text and run `{cli_bin} start-goal --guided --project . --goal-text \"$ARGUMENTS\"` before planning work.",
                 f"If arguments are empty, inspect `{cli_bin} bootstrap-command-pack --project .`, `{cli_bin} status`, and `{cli_bin} slash-commands` before changing files.",
-                f"Use `{cli_bin} agent-onboard --list-agent-types` when the host runtime is unclear; pass an exact type such as `codex-app`, `codex-cli`, or `claude-code`, never ambiguous `codex`.",
+                f"Use `{cli_bin} agent-onboard --list-agent-types` when the host runtime is unclear; pass an exact type such as `codex-app`, `codex-cli`, `claude-code`, or `cursor-cli`, never ambiguous `codex`.",
                 "When project work is started, plan ordered P0/P1/P2 todos, write them through LoopX todo state, refresh state, activate the host loop if missing/stale, run quota, and take one bounded allowed step.",
-                "Host loop activation means Codex App heartbeat automation, Codex CLI visible `/goal <task_body>`, Claude Code native `/loop`, or a custom host-loop gate from `loopx agent-onboard`.",
+                "Host loop activation means Codex App heartbeat automation, Codex CLI visible `/goal <task_body>`, Claude Code native `/loop`, `loopx agent-start --agent-type cursor-cli` for Cursor CLI, or a custom host-loop gate from `loopx agent-onboard`.",
                 "If this session cannot mutate the host loop surface, surface the exact pasteable gate instead of saying LoopX is autonomously connected.",
             ],
         },
@@ -225,6 +226,125 @@ def _claude_home(value: str | None = None) -> Path:
     return Path(raw).expanduser()
 
 
+def _cursor_home(value: str | None = None) -> Path:
+    raw = value or os.environ.get("CURSOR_HOME") or str(Path.home() / ".cursor")
+    return Path(raw).expanduser()
+
+
+def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
+    return "\n\n".join(
+        [
+            "---\ndescription: \"LoopX control-plane protocol for cursor-agent. Gates each delivery tick through loopx quota should-run; writeback via loopx todo complete + loopx quota spend-slot.\"\nalwaysApply: false\n---",
+            _managed_marker(command="loopx.mdc", surface="cursor"),
+            "# LoopX Protocol for Cursor CLI",
+            (
+                "Treat this as the LoopX tick protocol for `cursor-agent` (`cursor-cli` agent type). "
+                "Cursor CLI has no native loop runtime; LoopX owns the external tick driver that "
+                "re-invokes `cursor-agent -p` each tick."
+            ),
+            "\n".join(
+                [
+                    "## Control-plane gate (shell out to loopx CLI — Codex-style)",
+                    "",
+                    "At the start of each tick, before any delivery work:",
+                    "",
+                    "```bash",
+                    "# Pass --registry if LOOPX_GLOBAL_REGISTRY is set (same registry as the tick worker).",
+                    'REGISTRY_ARG="${LOOPX_GLOBAL_REGISTRY:+--registry "$LOOPX_GLOBAL_REGISTRY"}"',
+                    f'{cli_bin} $REGISTRY_ARG quota should-run --goal-id "$LOOPX_GOAL_ID" --agent-id "$LOOPX_AGENT_ID"',
+                    "```",
+                    "",
+                    "If `should_run` is false: emit a compact paused summary and stop — do not do delivery work or spend quota.",
+                    "",
+                    "If `should_run` is true: proceed with one bounded delivery segment.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "## Bounded delivery (one segment per tick)",
+                    "",
+                    f'- Read `{cli_bin} $REGISTRY_ARG status` and `{cli_bin} $REGISTRY_ARG todo claim ...` to understand the active task.',
+                    "- Do one concrete, bounded, public-safe delivery segment.",
+                    f'- Write progress through `{cli_bin} $REGISTRY_ARG todo update ...`.',
+                ]
+            ),
+            "\n".join(
+                [
+                    "## Writeback after completed delivery",
+                    "",
+                    "After a successfully completed delivery segment, run in this order:",
+                    "",
+                    "```bash",
+                    f'{cli_bin} $REGISTRY_ARG todo complete --goal-id "$LOOPX_GOAL_ID" --todo-id <todo_id> --claimed-by "$LOOPX_AGENT_ID" --evidence "<public-safe evidence>"',
+                    f'{cli_bin} $REGISTRY_ARG refresh-state --goal-id "$LOOPX_GOAL_ID" --project "$LOOPX_PROJECT" --agent-id "$LOOPX_AGENT_ID"',
+                    f'{cli_bin} $REGISTRY_ARG quota spend-slot --goal-id "$LOOPX_GOAL_ID" --slots 1 --source heartbeat --execute --agent-id "$LOOPX_AGENT_ID"',
+                    "```",
+                    "",
+                    "Run `todo complete` first, then `refresh-state --goal-id`, then `quota spend-slot`.",
+                    "Only spend a slot on validated, bounded completion — not on partial progress.",
+                    "The LoopX tick worker verifies that quota accounting changed before it counts the tick complete.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "## External tick driver (LoopX-owned loop)",
+                    "",
+                    "Cursor CLI has no native loop runtime. LoopX installs two scripts into `$CURSOR_HOME/bin/`:",
+                    "",
+                    "- `$CURSOR_HOME/bin/loopx-cursor-cli-loop` — **use `loopx agent-start` to start this**",
+                    "- `$CURSOR_HOME/bin/loopx-cursor-cli-tick-worker` — one tick (quota gate + heartbeat-prompt + cursor-agent)",
+                    "",
+                    "```bash",
+                    "# Preferred: use loopx agent-start (handles env, managed-marker check, and exec):",
+                    "loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id> \\",
+                    "  --project . --cursor-home $(pwd)/.cursor",
+                    "```",
+                    "",
+                    "The loop re-invokes the tick worker every `LOOPX_CURSOR_TICK_INTERVAL` seconds",
+                    "(default 60s, or the scheduler_hint recommended_interval_minutes from quota).",
+                    "When quota is paused it waits `LOOPX_CURSOR_PAUSE_INTERVAL` seconds (default 60s)",
+                    "or the scheduler_hint, before retrying. Set `LOOPX_CURSOR_MAX_TICKS` to limit",
+                    "the number of ticks (default: unlimited).",
+                    "",
+                    "The first tick is adaptive: if no todos exist yet, the heartbeat-prompt",
+                    "instructs cursor-agent to write goals and todos before executing.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "## Model selection and cost control",
+                    "",
+                    "Set `LOOPX_CURSOR_MODEL` to control which model each tick uses:",
+                    "",
+                    "```bash",
+                    "export LOOPX_CURSOR_MODEL=composer-2.5        # standard (default)",
+                    "export LOOPX_CURSOR_MODEL=gpt-5.3-codex-low   # cheaper",
+                    "export LOOPX_CURSOR_MODEL=gpt-5.3-codex-high  # more capable, more expensive",
+                    "```",
+                    "",
+                    "If `LOOPX_CURSOR_MODEL` is not set, the tick defaults to `composer-2.5`",
+                    "and prints a warning. Run `cursor-agent --list-models` to see all options.",
+                    "Thinking/high-reasoning models (e.g. `claude-opus-4-8-thinking-high`) cost",
+                    "significantly more per tick — set `LOOPX_CURSOR_MODEL` explicitly to avoid",
+                    "unexpected spend.",
+                ]
+            ),
+            "\n".join(
+                [
+                    "## Auto-approval flags (not passed by LoopX)",
+                    "",
+                    "`cursor-agent` flags `--force`, `--yolo`, and `--approve-mcps` grant unsandboxed "
+                    "write and execution auto-approval. The LoopX-owned driver does not pass these "
+                    "flags. Use direct Cursor CLI outside `loopx agent-start` until LoopX exposes an "
+                    "explicit owner-authorized pass-through contract. The default "
+                    "`cursor-agent -p <task_body>` is the safe conservative baseline.",
+                ]
+            ),
+            "Keep public/private boundaries intact and do not perform external writes unless the active LoopX state or owner explicitly authorizes them.",
+        ]
+    ) + "\n"
+
+
 def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
     requested = surfaces or ["all"]
     normalized: list[str] = []
@@ -235,6 +355,8 @@ def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
             candidates = ["codex"]
         elif surface in {"codex-app", "codex-ide", "codex-cli"}:
             candidates = ["codex"]
+        elif surface in {"cursor", "cursor-cli"}:
+            candidates = ["cursor"]
         else:
             candidates = [surface]
         for candidate in candidates:
@@ -252,11 +374,13 @@ def install_slash_commands(
     include_legacy_aliases: bool = True,
     codex_home: str | None = None,
     claude_home: str | None = None,
+    cursor_home: str | None = None,
 ) -> dict[str, Any]:
     specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=include_legacy_aliases)
     effective_surfaces = _normalize_surfaces(surfaces)
     codex_root = _codex_home(codex_home)
     claude_root = _claude_home(claude_home)
+    cursor_root = _cursor_home(cursor_home)
     installed: list[dict[str, Any]] = []
 
     if "codex" in effective_surfaces:
@@ -432,6 +556,77 @@ def install_slash_commands(
                 }
             )
 
+    if "cursor" in effective_surfaces:
+        rules_dir = cursor_root / "rules"
+        mdc_path = rules_dir / "loopx.mdc"
+        if uninstall:
+            mdc_status = _retire_status(mdc_path, execute=execute)
+        else:
+            mdc_content = _cursor_loopx_mdc_body(cli_bin=cli_bin)
+            mdc_status = _target_status(mdc_path, mdc_content, execute=execute)
+        installed.append(
+            {
+                "surface": "cursor",
+                "host_surfaces": ["cursor-cli"],
+                "mechanism": "cursor_rules_loopx_mdc",
+                "command": "loopx.mdc",
+                "path": str(mdc_path),
+                "status": mdc_status,
+                "invoke_as": [],
+                "note": (
+                    "Tick protocol for cursor-agent. "
+                    "Auto-approval flags (--force/--yolo/--approve-mcps) are not passed by the "
+                    "LoopX-owned driver."
+                ),
+            }
+        )
+
+        bin_dir = cursor_root / "bin"
+        tick_worker_path = bin_dir / "loopx-cursor-cli-tick-worker"
+        for script_name, mechanism, script_body, script_note in [
+            (
+                "loopx-cursor-cli-tick-worker",
+                "cursor_cli_tick_worker_script",
+                CURSOR_CLI_TICK_WORKER_PY,
+                "One tick: quota gate + heartbeat-prompt + cursor-agent -p. Run directly or via the loop script.",
+            ),
+            (
+                "loopx-cursor-cli-loop",
+                "cursor_cli_loop_script",
+                CURSOR_CLI_LOOP_PY,
+                "Continuous loop: re-invokes loopx-cursor-cli-tick-worker each tick. "
+                "Control with LOOPX_CURSOR_TICK_INTERVAL, LOOPX_CURSOR_PAUSE_INTERVAL, LOOPX_CURSOR_MAX_TICKS.",
+            ),
+        ]:
+            script_path = bin_dir / script_name
+            script_content = (
+                "#!/usr/bin/env python3\n"
+                f"# {_managed_marker(command=script_name, surface='cursor')}\n"
+                + script_body.lstrip("\n")
+            )
+            if uninstall:
+                script_status = _retire_status(script_path, execute=execute)
+            else:
+                script_status = _target_status(script_path, script_content, execute=execute)
+                if execute and script_status in ("created", "updated", "upgraded_legacy_managed", "unchanged"):
+                    script_path.chmod(0o755)
+            installed.append(
+                {
+                    "surface": "cursor",
+                    "host_surfaces": ["cursor-cli"],
+                    "mechanism": mechanism,
+                    "command": script_name,
+                    "path": str(script_path),
+                    "status": script_status,
+                    "invoke_as": [str(script_path)],
+                    "note": script_note,
+                }
+            )
+        tick_worker_path = bin_dir / "loopx-cursor-cli-tick-worker"
+        tick_worker_status = next(
+            i["status"] for i in installed if i.get("command") == "loopx-cursor-cli-tick-worker"
+        )
+
     status_counts: dict[str, int] = {}
     for item in installed:
         status = str(item["status"])
@@ -452,6 +647,9 @@ def install_slash_commands(
             "codex_prompt_dir": None,
             "codex_skill_dir": str(codex_root / "skills") if "codex" in effective_surfaces else None,
             "claude_skill_dir": str(claude_root / "skills") if "claude-code" in effective_surfaces else None,
+            "cursor_rule_dir": str(cursor_root / "rules") if "cursor" in effective_surfaces else None,
+            "cursor_tick_worker": str(cursor_root / "bin" / "loopx-cursor-cli-tick-worker") if "cursor" in effective_surfaces else None,
+            "cursor_loop_script": str(cursor_root / "bin" / "loopx-cursor-cli-loop") if "cursor" in effective_surfaces else None,
             "status_counts": status_counts,
             "skip_policy": (
                 "Uninstall removes only LoopX-managed files; user files without a LoopX managed marker are preserved"
@@ -464,6 +662,7 @@ def install_slash_commands(
             "Codex does not currently support user-defined native top-level slash commands; use explicit skill invocation through `$loopx` or `/skills`.",
             "Only explicit LoopX command-facade skills are installed with agents/openai.yaml policy allow_implicit_invocation=false; richer workflow skills stay implicit.",
             "Claude Code discovers user skills from CLAUDE_HOME/skills and exposes each skill name as a slash command.",
+            "Cursor rules are written to CURSOR_HOME/rules/loopx.mdc; cursor-agent picks them up as a user-level tick protocol. For cursor-agent -p headless use, install at project level with --cursor-home $(pwd)/.cursor so rules are loaded from .cursor/rules/. Auto-approval flags are not passed by the LoopX-owned driver.",
             "Uninstall is fail-closed: it retires only files carrying the LoopX managed marker and leaves user-owned files in place.",
         ],
     }
@@ -482,12 +681,30 @@ def render_slash_command_install_markdown(payload: dict[str, Any]) -> str:
     codex_prompt_dir = payload.get("summary", {}).get("codex_prompt_dir")
     codex_skill_dir = payload.get("summary", {}).get("codex_skill_dir")
     claude_skill_dir = payload.get("summary", {}).get("claude_skill_dir")
+    cursor_rule_dir = payload.get("summary", {}).get("cursor_rule_dir")
+    cursor_tick_worker = payload.get("summary", {}).get("cursor_tick_worker")
     if codex_prompt_dir:
         lines.append(f"- codex prompts: `{codex_prompt_dir}`")
     if codex_skill_dir:
         lines.append(f"- codex skills: `{codex_skill_dir}`")
     if claude_skill_dir:
         lines.append(f"- claude skills: `{claude_skill_dir}`")
+    if cursor_rule_dir:
+        lines.append(f"- cursor rules: `{cursor_rule_dir}`")
+    cursor_loop_script = payload.get("summary", {}).get("cursor_loop_script")
+    if cursor_tick_worker:
+        lines.append(f"- cursor tick worker: `{cursor_tick_worker}`")
+    if cursor_loop_script:
+        lines.append(f"- cursor loop script: `{cursor_loop_script}`")
+        if operation != "uninstall":
+            lines.append("")
+            lines.append("Next step — start the LoopX-owned Cursor loop:")
+            lines.append("```bash")
+            lines.append(
+                "loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id>"
+                " --project . --cursor-home $(pwd)/.cursor"
+            )
+            lines.append("```")
     counts = payload.get("summary", {}).get("status_counts") or {}
     if isinstance(counts, dict) and counts:
         count_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))

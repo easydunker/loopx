@@ -24,6 +24,7 @@ from .capabilities.value_connectors.cli import (
     register_value_connector_commands,
 )
 from .cli_commands import (
+    handle_agent_start_command,
     handle_benchmark_command,
     handle_bootstrap_connect_command,
     handle_canary_command,
@@ -64,6 +65,7 @@ from .cli_commands import (
     register_multi_agent_commands,
     register_project_lifecycle_commands,
     register_pr_review_command,
+    register_agent_start_command,
     register_quota_command,
     register_registry_admin_commands,
     register_slash_commands_command,
@@ -180,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     register_summary_all_command(sub, add_subcommand_format)
     register_pr_review_command(sub, add_subcommand_format)
     register_slash_commands_command(sub, add_subcommand_format)
+    register_agent_start_command(sub, add_subcommand_format)
     register_dreaming_commands(sub, add_subcommand_format)
     register_evidence_log_command(sub, add_subcommand_format)
     register_todo_command(sub)
@@ -428,6 +431,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     if slash_commands_result is not None:
         return slash_commands_result
+
+    # Pass registry_path=None when --registry was not explicitly set so that
+    # _resolve_global_registry() can honour LOOPX_GLOBAL_REGISTRY from the environment
+    # rather than always overwriting it with the CLI default.
+    _registry_explicit = any(a.startswith("--registry") for a in raw_argv)
+    agent_start_result = handle_agent_start_command(
+        args,
+        registry_path=registry_path if _registry_explicit else None,
+        output_format=output_format,
+        print_payload=print_payload,
+    )
+    if agent_start_result is not None:
+        return agent_start_result
 
     if args.command == "dreaming":
         return handle_dreaming_command(
