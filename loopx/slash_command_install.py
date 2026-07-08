@@ -249,8 +249,8 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
                     "At the start of each tick, before any delivery work:",
                     "",
                     "```bash",
-                    f"# Pass --registry if LOOPX_GLOBAL_REGISTRY is set (same registry as the tick worker).",
-                    f'REGISTRY_ARG="${{LOOPX_GLOBAL_REGISTRY:+--registry "$LOOPX_GLOBAL_REGISTRY"}}"',
+                    "# Pass --registry if LOOPX_GLOBAL_REGISTRY is set (same registry as the tick worker).",
+                    'REGISTRY_ARG="${LOOPX_GLOBAL_REGISTRY:+--registry "$LOOPX_GLOBAL_REGISTRY"}"',
                     f'{cli_bin} $REGISTRY_ARG quota should-run --goal-id "$LOOPX_GOAL_ID" --agent-id "$LOOPX_AGENT_ID"',
                     "```",
                     "",
@@ -696,14 +696,15 @@ def render_slash_command_install_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- cursor tick worker: `{cursor_tick_worker}`")
     if cursor_loop_script:
         lines.append(f"- cursor loop script: `{cursor_loop_script}`")
-        lines.append("")
-        lines.append("Next step — start the LoopX-owned Cursor loop:")
-        lines.append("```bash")
-        lines.append(
-            "loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id>"
-            " --project . --cursor-home $(pwd)/.cursor"
-        )
-        lines.append("```")
+        if operation != "uninstall":
+            lines.append("")
+            lines.append("Next step — start the LoopX-owned Cursor loop:")
+            lines.append("```bash")
+            lines.append(
+                "loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id>"
+                " --project . --cursor-home $(pwd)/.cursor"
+            )
+            lines.append("```")
     counts = payload.get("summary", {}).get("status_counts") or {}
     if isinstance(counts, dict) and counts:
         count_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))

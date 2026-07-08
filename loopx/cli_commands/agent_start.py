@@ -269,37 +269,25 @@ def _start_cursor_cli(
         print_payload(payload, output_format(args), _render_agent_start_markdown)
         return 1
 
-    env = os.environ.copy()
-    env["LOOPX_GOAL_ID"] = goal_id
-    env["LOOPX_AGENT_ID"] = agent_id
-    env["LOOPX_PROJECT"] = project
-    env["LOOPX_CURSOR_MODEL"] = model
-    if global_registry:
-        env["LOOPX_GLOBAL_REGISTRY"] = global_registry
-    if cursor_home:
-        env["CURSOR_HOME"] = str(_cursor_home(cursor_home))
-    if args.max_ticks:
-        env["LOOPX_CURSOR_MAX_TICKS"] = str(args.max_ticks)
-    if args.tick_interval:
-        env["LOOPX_CURSOR_TICK_INTERVAL"] = str(args.tick_interval)
-
-    def _env(k: str, v: str) -> str:
-        return f"{k}={shlex.quote(v)}"
-
-    cmd_parts = [
-        _env("LOOPX_GOAL_ID", goal_id),
-        _env("LOOPX_AGENT_ID", agent_id),
-        _env("LOOPX_PROJECT", project),
-        _env("LOOPX_CURSOR_MODEL", model),
+    overrides: list[tuple[str, str]] = [
+        ("LOOPX_GOAL_ID", goal_id),
+        ("LOOPX_AGENT_ID", agent_id),
+        ("LOOPX_PROJECT", project),
+        ("LOOPX_CURSOR_MODEL", model),
     ]
     if global_registry:
-        cmd_parts.append(_env("LOOPX_GLOBAL_REGISTRY", global_registry))
+        overrides.append(("LOOPX_GLOBAL_REGISTRY", global_registry))
     if cursor_home:
-        cmd_parts.append(_env("CURSOR_HOME", str(_cursor_home(cursor_home))))
+        overrides.append(("CURSOR_HOME", str(_cursor_home(cursor_home))))
     if args.max_ticks:
-        cmd_parts.append(_env("LOOPX_CURSOR_MAX_TICKS", str(args.max_ticks)))
+        overrides.append(("LOOPX_CURSOR_MAX_TICKS", str(args.max_ticks)))
     if args.tick_interval:
-        cmd_parts.append(_env("LOOPX_CURSOR_TICK_INTERVAL", str(args.tick_interval)))
+        overrides.append(("LOOPX_CURSOR_TICK_INTERVAL", str(args.tick_interval)))
+
+    env = os.environ.copy()
+    env.update(dict(overrides))
+
+    cmd_parts = [f"{k}={shlex.quote(v)}" for k, v in overrides]
     cmd_parts.append(shlex.quote(str(cursor_loop_script)))
     cmd_display = " ".join(cmd_parts)
 
@@ -336,17 +324,27 @@ def _activation_instructions_payload(
     host_surface = activation.get("host_surface", "")
     steps = activation.get("activation_steps") or []
 
-    if canonical in ("codex-cli", "codex-app"):
+    if canonical == "codex-cli":
         instructions = [
-            "Codex uses the LoopX multi-agent launcher to start the loop.",
-            "Run the launcher or use `/goal <task_body>` in the Codex TUI.",
+            "Codex CLI uses the visible TUI goal mode.",
+            "Get the task body, then pass it to the Codex TUI via `/goal`:",
             "",
-            "Get the task_body:",
-            f"```bash",
+            "```bash",
             f"loopx --format json heartbeat-prompt --thin --goal-id {goal_id} --agent-id {agent_id}",
-            f"```",
+            "```",
             "",
-            "Then start the Codex TUI with that task body.",
+            "Then in the Codex TUI: `/goal <task_body>`",
+        ]
+    elif canonical == "codex-app":
+        instructions = [
+            "Codex App uses heartbeat automation updates.",
+            "Get the task body, then create or update a Codex App heartbeat automation:",
+            "",
+            "```bash",
+            f"loopx --format json heartbeat-prompt --thin --goal-id {goal_id} --agent-id {agent_id}",
+            "```",
+            "",
+            "Create or update the Codex App automation with the returned task_body.",
         ]
     elif canonical == "claude-code":
         instructions = [

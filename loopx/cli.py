@@ -432,9 +432,13 @@ def main(argv: list[str] | None = None) -> int:
     if slash_commands_result is not None:
         return slash_commands_result
 
+    # Pass registry_path=None when --registry was not explicitly set so that
+    # _resolve_global_registry() can honour LOOPX_GLOBAL_REGISTRY from the environment
+    # rather than always overwriting it with the CLI default.
+    _registry_explicit = any(a.startswith("--registry") for a in raw_argv)
     agent_start_result = handle_agent_start_command(
         args,
-        registry_path=registry_path,
+        registry_path=registry_path if _registry_explicit else None,
         output_format=output_format,
         print_payload=print_payload,
     )
