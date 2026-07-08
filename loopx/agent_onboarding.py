@@ -121,24 +121,32 @@ def build_agent_onboarding_packet(
     inspection = inspect_bootstrap_connection(project, goal_id=goal_id)
     resolved_project = str(inspection["project"])
     resolved_goal_id = str(inspection["goal_id"])
+    # For cursor-cli, resolve a concrete agent_id early so all downstream
+    # commands (quota_guard, bootstrap_pack, agent_onboard_recheck, the
+    # activation packet, and the return value) use one consistent identity
+    # rather than agent-start generating a different ID at launch time.
+    resolved_agent_id = (
+        agent_id
+        if agent_id or canonical_agent_type != "cursor-cli"
+        else f"cursor-cli-{resolved_goal_id[:8]}"
+    )
     host_loop_activation = build_host_loop_activation_packet(
         agent_type=canonical_agent_type,
         goal_id=resolved_goal_id,
         cli_bin=cli_bin,
-        agent_id=agent_id,
+        agent_id=resolved_agent_id,
     )
     install_command = _surface_install_command(canonical_agent_type, cli_bin)
     bootstrap_pack_command = _bootstrap_pack_command(
         project=resolved_project,
         goal_id=resolved_goal_id,
-        agent_id=agent_id,
+        agent_id=resolved_agent_id,
         agent_type=canonical_agent_type,
         cli_bin=cli_bin,
         task_text=task_text,
     )
     cursor_start_command: str | None = None
     if canonical_agent_type == "cursor-cli":
-        resolved_agent_id = agent_id or f"cursor-cli-{resolved_goal_id[:8]}"
         cursor_start_command = _cursor_cli_start_command(
             goal_id=resolved_goal_id,
             agent_id=resolved_agent_id,
@@ -151,14 +159,14 @@ def build_agent_onboarding_packet(
         "quota_guard": render_quota_guard_command(
             resolved_goal_id,
             cli_bin=cli_bin,
-            agent_id=agent_id,
+            agent_id=resolved_agent_id,
         ),
         "agent_onboard_recheck": (
             f"{shell_arg(cli_bin)} agent-onboard "
             f"--agent-type {shell_arg(canonical_agent_type)} "
             f"--project {shell_arg(resolved_project)} "
             f"--goal-id {shell_arg(resolved_goal_id)}"
-            + (f" --agent-id {shell_arg(agent_id)}" if agent_id else "")
+            + (f" --agent-id {shell_arg(resolved_agent_id)}" if resolved_agent_id else "")
         ),
     }
     if install_command:
@@ -170,7 +178,7 @@ def build_agent_onboarding_packet(
             f"{shell_arg(cli_bin)} codex-cli-bootstrap-message "
             f"--project {shell_arg(resolved_project)} "
             f"--goal-id {shell_arg(resolved_goal_id)}"
-            + (f" --agent-id {shell_arg(agent_id)}" if agent_id else "")
+            + (f" --agent-id {shell_arg(resolved_agent_id)}" if resolved_agent_id else "")
         )
     return {
         "ok": True,
@@ -178,7 +186,7 @@ def build_agent_onboarding_packet(
         "agent_type": canonical_agent_type,
         "project": resolved_project,
         "goal_id": resolved_goal_id,
-        "agent_id": agent_id,
+        "agent_id": resolved_agent_id,
         "task_text": task_text,
         "project_connection": inspection,
         "host_loop_activation": host_loop_activation,
