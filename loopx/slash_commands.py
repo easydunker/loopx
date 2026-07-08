@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .presentation.markdown import markdown_code, markdown_table_row, markdown_table_separator
+
 
 SCHEMA_VERSION = "loopx_slash_command_catalog_v0"
 
@@ -54,7 +56,7 @@ def build_slash_command_catalog(
             scope="project",
             intent="Start a concrete project goal: plan ordered todos, write them in priority order, activate the host loop when needed, then enter the quota-gated loop.",
             mutation_policy="explicit goal-start intent may write project-local LoopX state after planning and must activate/report the host loop",
-            cli_reference=f"{cli_bin} bootstrap-command-pack --project . --goal-text '<goal text>'",
+            cli_reference=f"{cli_bin} start-goal --guided --project . --goal-text '<goal text>'",
             agent_contract={
                 "schema_version": "loopx_goal_start_agent_contract_v0",
                 "planner_required_before_todo_write": True,
@@ -211,10 +213,6 @@ def render_onboarding_slash_command_note(commands: list[dict[str, Any]], *, cli_
     )
 
 
-def _markdown_table_cell(value: Any) -> str:
-    return str(value or "").replace("\n", " ").replace("|", "\\|")
-
-
 def render_slash_command_catalog_markdown(payload: dict[str, Any]) -> str:
     if not payload.get("ok"):
         return "# LoopX Slash Commands\n\n- ok: `False`"
@@ -223,8 +221,8 @@ def render_slash_command_catalog_markdown(payload: dict[str, Any]) -> str:
         "",
         str(payload.get("onboarding", {}).get("suggested_user_note") or ""),
         "",
-        "| Command | Scope | Intent | Mutation policy | CLI reference |",
-        "| --- | --- | --- | --- | --- |",
+        markdown_table_row(["Command", "Scope", "Intent", "Mutation policy", "CLI reference"]),
+        markdown_table_separator(5),
     ]
     for item in payload.get("commands") or []:
         if not isinstance(item, dict):
@@ -239,12 +237,15 @@ def render_slash_command_catalog_markdown(payload: dict[str, Any]) -> str:
         if agent_contract.get("host_loop_activation_required_after_todo_writeback"):
             intent += " Agent contract: after todo writeback, activate the host loop or report the concrete host-tool gate."
         lines.append(
-            "| "
-            f"`{_markdown_table_cell(item.get('command'))}` | "
-            f"{_markdown_table_cell(item.get('scope'))} | "
-            f"{_markdown_table_cell(intent)} | "
-            f"{_markdown_table_cell(item.get('mutation_policy'))} | "
-            f"`{_markdown_table_cell(item.get('cli_reference'))}` |"
+            markdown_table_row(
+                [
+                    markdown_code(item.get("command")),
+                    item.get("scope"),
+                    intent,
+                    item.get("mutation_policy"),
+                    markdown_code(item.get("cli_reference")),
+                ]
+            )
         )
     lines.extend(
         [

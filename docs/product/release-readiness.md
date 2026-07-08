@@ -115,6 +115,30 @@ path, and canary route rather than as a user-facing release baseline.
   research panes, wires agent-scoped evidence read hints into replan, and
   hardens successor/frontier recovery when completed advancement has no next
   executable todo.
+- `v0.1.10` on 2026-07-06 11:50 +08:00: scoped user-gate and agent-management
+  release at the matching `v0.1.10` tag. This release makes blocking owner
+  todos explicitly typed as `user_gate` or non-blocking `user_action`, scopes
+  per-agent gates with `blocks_agent`, adds read-only live agent-management
+  status projections, and continues moving quota, todo, scheduler, review
+  packet, and handoff rules into bounded control-plane contexts with focused
+  canary coverage.
+- `v0.1.11` on 2026-07-06 19:38 +08:00: vision-replan and recovery-routing
+  release at the matching `v0.1.11` tag. This release makes goal-vision gaps
+  participate in the quota/replan decision plane, preserves continuation audits
+  in quota and interaction contracts, supersedes stale vision checkpoint gaps
+  when newer evidence closes them, and adds judge guidance for when a vision
+  gap is real work versus stale state. It also promotes the latest control-plane
+  bounded-context cleanup, auto-research successor/evidence fixes, connector
+  source-map packets, structured run-index classification, and Codex CLI/TUI
+  recovery fixes.
+- `v0.1.12` on 2026-07-08 02:05 +08:00: presentation/read-model and frontier
+  recovery release at the matching `v0.1.12` tag. This release moves large
+  status, goal-channel, dashboard, and Lark rendering paths into bounded
+  presentation/read-model modules, fixes monitor-only plus open-vision frontier
+  replan gaps, makes installer reruns overwrite stale wrappers/files safely,
+  exposes premerge canary progress earlier, and promotes auto-research visible
+  worker/successor routing plus selected public benchmark route/profile and
+  SkillsBench helper hardening.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
@@ -169,7 +193,7 @@ python3 examples/canary/canary-promotion-readiness-smoke.py --no-write-evidence
 ```
 
 The default dashboard policy is `--dashboard-mode=auto`: source checkouts run
-dashboard demo-readiness when `apps/dashboard` is present, while installed
+dashboard demo-readiness when `apps/presentation/dashboard` is present, while installed
 release snapshots that omit the dashboard app skip that optional surface and
 keep the omission visible in the canary output. Use `--dashboard-mode=require`
 when the dashboard/frontstage itself is being promoted, and

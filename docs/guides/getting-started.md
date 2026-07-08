@@ -84,7 +84,7 @@ entry point is different:
 
 | Command family | Host entry | CLI fallback |
 | --- | --- | --- |
-| Project goal start | `/loopx <goal text>` where the host exposes native slash commands; `$loopx <goal text>` or the `loopx` skill in Codex surfaces that use explicit skills. | `loopx bootstrap-command-pack --project . --goal-text "<goal text>"` |
+| Project goal start | `/loopx <goal text>` where the host exposes native slash commands; `$loopx <goal text>` or the `loopx` skill in Codex surfaces that use explicit skills. | `loopx start-goal --guided --project . --goal-text "<goal text>"` |
 | Global manager views | `/loopx-global-summary`, `/loopx-global-gates`, `/loopx-global-todos`, `/loopx-global-risks`. | `loopx slash-commands`, then run the listed global manager command for the view you need. |
 | PR review queue | `/loopx-pr-review`. | `loopx pr-review` |
 
@@ -106,17 +106,20 @@ marker or legacy signature, LoopX leaves it untouched and reports
 `skipped_user_file`.
 
 If a project-local goal command still cannot be invoked through the host, run
-the equivalent command pack from the project root:
+the equivalent guided start preview from the project root:
 
 ```bash
-loopx bootstrap-command-pack --project . --goal-text "<goal text>"
+loopx start-goal --guided --project . --goal-text "<goal text>"
 ```
 
-That preserves the `/loopx <goal text>` semantics: preserve the exact task
-text, plan before todo writeback, refresh state, run `quota should-run`, and
-continue only when the guard allows. For global manager or PR review commands,
-use `loopx slash-commands` to print the current canonical command list and
-fallback CLI shapes.
+That preserves the `/loopx <goal text>` semantics while keeping mutation under
+the agent's control: preserve the exact task text, inspect or connect state,
+plan before todo writeback, refresh state, activate the correct host loop, run
+`quota should-run`, and continue only when the guard allows. Host and plugin
+integrations that need the lower-level handoff packet can use
+`loopx bootstrap-command-pack --project . --goal-text "<goal text>"`. For global
+manager or PR review commands, use `loopx slash-commands` to print the current
+canonical command list and fallback CLI shapes.
 
 ## Local State Backup
 
@@ -744,7 +747,7 @@ loopx serve-status --port 8765
 Run the dashboard:
 
 ```bash
-cd ~/loopx/apps/dashboard
+cd ~/loopx/apps/presentation/dashboard
 npm install
 npm run dev
 ```
@@ -769,7 +772,7 @@ The dashboard should answer, before raw log drill-down:
 - what is waiting on evidence;
 - what boundary cannot be crossed yet.
 
-See [apps/dashboard/README.md](../../apps/dashboard/README.md).
+See [apps/presentation/dashboard/README.md](../../apps/presentation/dashboard/README.md).
 
 ## Public / Private Boundary
 
@@ -818,7 +821,7 @@ git diff --check
 For dashboard work:
 
 ```bash
-cd apps/dashboard
+cd apps/presentation/dashboard
 npm install
 npm run build
 npm run smoke:demo-readiness

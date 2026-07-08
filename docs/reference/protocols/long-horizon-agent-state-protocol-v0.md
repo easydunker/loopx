@@ -55,12 +55,12 @@ compress state, but they do not own truth or grant permission.
 | Projection | Existing anchor | Display use |
 | --- | --- | --- |
 | `status_contract_v2` | `loopx status`, `docs/status-data-contract.md` | CLI/dashboard status envelope. |
-| `goal_channel_projection_v0` | `loopx/frontstage.py`, `loopx/status.py` | First-screen goal card: user todos, agent todos, open gates, active claims, latest event, next action. |
+| `goal_channel_projection_v0` | `loopx/control_plane/goals/goal_channel_projection.py`, `loopx/status.py` | First-screen goal card: user todos, agent todos, open gates, active claims, latest event, next action. |
 | `todo_index_v0` | `loopx/status.py` | Cross-goal todo index from attention queue and rollout events. |
 | `task_graph_projection_v0` | `docs/reference/protocols/task-graph-projection-v0.md` | Optional graph of blocks, validates, repairs, hands off, and supersedes. |
 | `review_packet` | `loopx review-packet`, `loopx/review_packet.py` | Operator-facing gate/review/handoff packet. |
 | `global_manager_command_v0` | `docs/reference/protocols/global-manager-command-v0.md` | Read-first global command response for progress, gates, todos, risks, and next actions. |
-| `frontstage dashboard` | `apps/dashboard/src/views/frontstage-page.tsx` | Dense operator UI for lanes, gates, todos, recent evidence, and risks. |
+| `frontstage dashboard` | `apps/presentation/dashboard/src/views/frontstage-page.tsx` | Dense operator UI for lanes, gates, todos, recent evidence, and risks. |
 
 Projection truth contract:
 

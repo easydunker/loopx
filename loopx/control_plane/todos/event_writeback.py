@@ -13,7 +13,12 @@ from ...event_sourced_state import (
     make_state_event,
 )
 from ...history import load_registry
-from ...status import active_state_event_projection_fields, state_event_log_candidates
+from ..goals.active_state_event_projection import (
+    active_state_event_projection_fields,
+    state_event_log_candidates,
+)
+from ..goals.path_resolution import resolve_goal_local_path
+from .active_state_todo_parser import parse_active_state_todos
 from .contract import (
     TODO_STATUS_DONE,
     TODO_STATUS_OPEN,
@@ -59,6 +64,8 @@ def event_projection_todo_context(
     fields = active_state_event_projection_fields(
         goal,
         state_path=state_path,
+        resolve_goal_local_path=resolve_goal_local_path,
+        parse_active_state_todos=parse_active_state_todos,
         item_limit=None,
     )
     if not fields.get("state_event_projection"):
@@ -86,7 +93,15 @@ def event_projection_todo_context(
     if not matched_item or matched_role is None:
         return None
     event_log_path = next(
-        (path for path in state_event_log_candidates(goal, state_path=state_path) if path.exists()),
+        (
+            path
+            for path in state_event_log_candidates(
+                goal,
+                state_path=state_path,
+                resolve_goal_local_path=resolve_goal_local_path,
+            )
+            if path.exists()
+        ),
         None,
     )
     if event_log_path is None:
@@ -125,8 +140,9 @@ def _append_event_projected_successor(
     task_class: str | None,
     action_kind: str | None,
     claimed_by: str | None,
-    unblocks_todo_id: str | None = None,
     dry_run: bool,
+    blocks_agent: str | None = None,
+    unblocks_todo_id: str | None = None,
 ) -> dict[str, Any]:
     section = TODO_SECTION_HEADINGS[role]
     summary = fields.get(f"{role}_todos")
@@ -150,6 +166,8 @@ def _append_event_projected_successor(
         payload["task_class"] = task_class
     if action_kind:
         payload["action_kind"] = action_kind
+    if blocks_agent:
+        payload["blocks_agent"] = blocks_agent
     if unblocks_todo_id:
         payload["unblocks_todo_id"] = unblocks_todo_id
     added_event = make_state_event(
@@ -199,6 +217,7 @@ def _append_event_projected_successor(
         "task_class": task_class,
         "action_kind": action_kind,
         "claimed_by": claimed_by,
+        "blocks_agent": blocks_agent,
         "unblocks_todo_id": unblocks_todo_id,
         "source": "event_log",
     }
@@ -270,8 +289,9 @@ def complete_event_projected_goal_todo(
     if next_agent_todo and not next_claimed_by:
         next_claimed_by = normalize_todo_claimed_by(effective_claimed_by)
     next_unblocks_todo_id = todo_id if next_agent_todo else None
+    next_user_blocks_agent = effective_claimed_by or primary_agent
     if next_user_todo and len(registered_agents) > 1:
-        if not (effective_claimed_by or primary_agent):
+        if not next_user_blocks_agent:
             raise ValueError(
                 "multi-agent --next-user-todo requires a completing --claimed-by "
                 "agent or coordination.primary_agent so the user_gate can be scoped"
@@ -290,6 +310,7 @@ def complete_event_projected_goal_todo(
                 task_class=next_task_class or "advancement_task",
                 action_kind=next_action_kind,
                 claimed_by=next_claimed_by,
+                blocks_agent=None,
                 unblocks_todo_id=next_unblocks_todo_id,
                 dry_run=dry_run,
             )
@@ -306,6 +327,7 @@ def complete_event_projected_goal_todo(
                 task_class="user_gate",
                 action_kind="gate",
                 claimed_by=None,
+                blocks_agent=next_user_blocks_agent,
                 unblocks_todo_id=None,
                 dry_run=dry_run,
             )

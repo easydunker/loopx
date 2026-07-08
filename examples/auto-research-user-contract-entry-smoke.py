@@ -171,11 +171,20 @@ def assert_start_wake_contract() -> None:
     assert "wake_visible_multi_agent_panes" not in cli_source
     assert "resolve_visible_launch_policy" in cli_source
     assert "make_visible_launcher_callback" in cli_source
+    assert "--auto-wake" in cli_source
+    assert "auto_wake=bool(visible_policy.launch_visible and args.auto_wake)" in cli_source
     start_source = cli_source.split('elif args.auto_research_command == "start":', 1)[1].split(
         'elif args.auto_research_command == "demo-supervisor":',
         1,
     )[0]
     assert "if args.codex_trust_workspace is None" not in start_source
+    demo_e2e_source = cli_source.split('elif args.auto_research_command == "demo-e2e":', 1)[1]
+    assert "default=True" in cli_source.split('"--auto-wake"', 1)[1].split(
+        '"--auto-wake-interval-seconds"',
+        1,
+    )[0]
+    assert "auto_wake=bool(visible_policy.launch_visible and args.auto_wake)" in demo_e2e_source
+    assert "auto_wake_interval_seconds=args.auto_wake_interval_seconds" in demo_e2e_source
 
     def start_policy(args: Namespace):
         return resolve_visible_launch_policy(
@@ -199,6 +208,7 @@ def assert_start_wake_contract() -> None:
         attach=False,
         no_attach=False,
         codex_trust_workspace=None,
+        auto_wake=True,
     )
     default_policy = start_policy(default_visible)
     assert default_policy.wake_visible_after_launch is False
@@ -212,6 +222,7 @@ def assert_start_wake_contract() -> None:
         attach=True,
         no_attach=False,
         codex_trust_workspace=None,
+        auto_wake=True,
     )
     takeover_policy = start_policy(attach_takeover)
     assert takeover_policy.wake_visible_after_launch is False
@@ -225,6 +236,7 @@ def assert_start_wake_contract() -> None:
         attach=False,
         no_attach=False,
         codex_trust_workspace=None,
+        auto_wake=True,
     )
     explicit_wake_policy = start_policy(explicit_wake)
     assert explicit_wake_policy.wake_visible_after_launch is True
@@ -238,6 +250,7 @@ def assert_start_wake_contract() -> None:
         attach=False,
         no_attach=False,
         codex_trust_workspace=None,
+        auto_wake=True,
     )
     manual_policy = start_policy(manual_takeover)
     assert manual_policy.wake_visible_after_launch is False
@@ -251,6 +264,7 @@ def assert_start_wake_contract() -> None:
         attach=False,
         no_attach=True,
         codex_trust_workspace=None,
+        auto_wake=False,
     )
     background_policy = start_policy(background_manual)
     assert background_policy.wake_visible_after_launch is False
@@ -264,6 +278,7 @@ def assert_start_wake_contract() -> None:
         attach=False,
         no_attach=False,
         codex_trust_workspace=None,
+        auto_wake=True,
     )
     headless_policy = start_policy(headless)
     assert headless_policy.wake_visible_after_launch is False
@@ -277,6 +292,7 @@ def assert_start_wake_contract() -> None:
         attach=False,
         no_attach=False,
         codex_trust_workspace=False,
+        auto_wake=True,
     )
     assert trust(explicit_no_trust) is False
 
@@ -287,6 +303,7 @@ def assert_start_wake_contract() -> None:
         attach=False,
         no_attach=False,
         codex_trust_workspace=True,
+        auto_wake=True,
     )
     assert trust(explicit_trust) is True
 

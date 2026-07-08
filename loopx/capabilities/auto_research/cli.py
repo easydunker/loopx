@@ -233,6 +233,22 @@ def register_auto_research_commands(
         ),
     )
     start_parser.add_argument(
+        "--auto-wake",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Run a session-scoped background wake loop so successor todos can be picked up "
+            "without a human sending `loopx multi-agent wake`. Use --no-auto-wake for full "
+            "manual takeover."
+        ),
+    )
+    start_parser.add_argument(
+        "--auto-wake-interval-seconds",
+        type=float,
+        default=45.0,
+        help=argparse.SUPPRESS,
+    )
+    start_parser.add_argument(
         "--no-attach",
         action="store_true",
         help="With visible --execute, start tmux in the background instead of attaching.",
@@ -261,6 +277,11 @@ def register_auto_research_commands(
         "--worker-loop-rounds",
         type=int,
         default=4,
+        help=argparse.SUPPRESS,
+    )
+    start_parser.add_argument(
+        "--configure-visible-worker-turn",
+        action="store_true",
         help=argparse.SUPPRESS,
     )
     start_parser.add_argument(
@@ -725,12 +746,32 @@ def register_auto_research_commands(
         help=argparse.SUPPRESS,
     )
     demo_e2e_parser.add_argument(
+        "--configure-visible-worker-turn",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    demo_e2e_parser.add_argument(
         "--wake-visible-after-launch",
         action="store_true",
         help=(
             "After starting visible tmux panes, broadcast the fixed pane-local A2A "
             "wake prompt. Each pane still runs its own LoopX tick from state."
         ),
+    )
+    demo_e2e_parser.add_argument(
+        "--auto-wake",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Run a session-scoped background wake loop for visible auto-research lanes. "
+            "Use --no-auto-wake for full manual takeover."
+        ),
+    )
+    demo_e2e_parser.add_argument(
+        "--auto-wake-interval-seconds",
+        type=float,
+        default=45.0,
+        help=argparse.SUPPRESS,
     )
     demo_e2e_parser.add_argument(
         "--keep-workspace",
@@ -808,6 +849,8 @@ def _execute_auto_research_demo_supervisor(
     workspace: str | None,
     create_workspace: bool,
     codex_trust_workspace: bool,
+    auto_wake: bool = False,
+    auto_wake_interval_seconds: float = 45.0,
 ) -> dict[str, object]:
     registry = load_registry(registry_path)
     runtime_root = resolve_runtime_root(registry, runtime_root_arg)
@@ -825,6 +868,8 @@ def _execute_auto_research_demo_supervisor(
         create_workspace=create_workspace,
         cwd=Path.cwd(),
         codex_trust_workspace=codex_trust_workspace,
+        auto_wake=auto_wake,
+        auto_wake_interval_seconds=auto_wake_interval_seconds,
         launch_result_schema="auto_research_demo_launch_result_v0",
         lane_default="research-lane",
     )
@@ -948,6 +993,8 @@ def handle_auto_research_command(
                 attach=visible_policy.attach,
                 replace_existing=args.replace_existing,
                 workspace_policy=start_workspace_policy,
+                auto_wake=bool(visible_policy.launch_visible and args.auto_wake),
+                auto_wake_interval_seconds=args.auto_wake_interval_seconds,
             )
 
             if visible_policy.launch_visible:
@@ -964,6 +1011,7 @@ def handle_auto_research_command(
                 execute=args.execute,
                 run_worker_loop=bool(args.execute and args.headless),
                 worker_loop_rounds=args.worker_loop_rounds,
+                configure_visible_worker_turn=args.configure_visible_worker_turn,
                 launch_visible=visible_policy.launch_visible,
                 keep_workspace=args.keep_workspace,
                 registry_path=registry_path,
@@ -1207,6 +1255,8 @@ def handle_auto_research_command(
                 attach=visible_policy.attach,
                 replace_existing=args.replace_existing,
                 workspace_policy=demo_workspace_policy,
+                auto_wake=bool(visible_policy.launch_visible and args.auto_wake),
+                auto_wake_interval_seconds=args.auto_wake_interval_seconds,
             )
 
             if visible_policy.launch_visible:
@@ -1224,6 +1274,7 @@ def handle_auto_research_command(
                 execute=args.execute,
                 run_worker_loop=run_hidden_worker_loop,
                 worker_loop_rounds=args.worker_loop_rounds,
+                configure_visible_worker_turn=args.configure_visible_worker_turn,
                 launch_visible=visible_policy.launch_visible,
                 keep_workspace=args.keep_workspace,
                 registry_path=registry_path,

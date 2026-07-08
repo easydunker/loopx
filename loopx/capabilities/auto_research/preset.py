@@ -13,6 +13,7 @@ from ..multi_agent.recipe import (
 AUTO_RESEARCH_PRESET_SCHEMA_VERSION = "auto_research_thin_preset_v0"
 AUTO_RESEARCH_MINIMAL_A2A_RECIPE_SCHEMA_VERSION = "auto_research_minimal_a2a_recipe_v0"
 AUTO_RESEARCH_ROLE_PROFILE_SCHEMA_VERSION = "auto_research_role_profile_v0"
+AUTO_RESEARCH_REQUIRED_HOLDOUT_IMPROVEMENTS = 2
 AUTO_RESEARCH_REQUIRED_SKILL = "loopx-auto-research"
 AUTO_RESEARCH_WORKER_SKILL_SOURCE = (
     "loopx/capabilities/auto_research/worker_skill/SKILL.md"
@@ -48,13 +49,37 @@ AUTO_RESEARCH_VALIDATED_SUMMARY_SUCCESSOR_CONDITION = _all(
 )
 AUTO_RESEARCH_NEXT_HYPOTHESIS_SUCCESSOR_CONDITION = _all(
     _condition("decision_summary.validated_promotion_candidate_count", "gt", 0, "no_validated_promotion_candidate"),
-    _condition("decision_summary.holdout_improvement_count", "lt", 2, "target_holdout_improvements_reached"),
+    _condition(
+        "decision_summary.holdout_improvement_count",
+        "lt",
+        AUTO_RESEARCH_REQUIRED_HOLDOUT_IMPROVEMENTS,
+        "target_holdout_improvements_reached",
+    ),
 )
 AUTO_RESEARCH_REFINED_DEV_SUCCESSOR_CONDITION = _all(
     _condition("decision_summary.holdout_improvement_count", "gt", 0, "initial_seed_dev_already_exists"),
-    _condition("decision_summary.holdout_improvement_count", "lt", 2, "target_holdout_improvements_reached"),
+    _condition(
+        "decision_summary.holdout_improvement_count",
+        "lt",
+        AUTO_RESEARCH_REQUIRED_HOLDOUT_IMPROVEMENTS,
+        "target_holdout_improvements_reached",
+    ),
     _condition("decision_summary.dev_candidate_pending_holdout_count", "eq", 0, "dev_candidate_already_pending_holdout"),
 )
+
+AUTO_RESEARCH_CONTINUATION_POLICY = {
+    "schema_version": "auto_research_continuation_policy_v0",
+    "successor_source": "role_profile.successor_todos",
+    "required_holdout_improvement_count": AUTO_RESEARCH_REQUIRED_HOLDOUT_IMPROVEMENTS,
+    "unmet_target_rule": (
+        "if validated_promotion_candidate_count>0 and holdout_improvement_count is below "
+        "required_holdout_improvement_count, create or link the role-declared successor"
+    ),
+    "no_followup_rule": (
+        "no-follow-up is valid only after the target is reached, a blocker/user gate is "
+        "projected, or evidence-backed retirement closes the frontier"
+    ),
+}
 
 
 def _successor(
@@ -113,6 +138,9 @@ AUTO_RESEARCH_ROLE_PROFILES: dict[str, dict[str, object]] = {
         "allowed_actions": ["write_research_contract", "review_research_contract"],
         "write_scope": ["research_contract_v0", "todo_item_v0"],
         "handoff": ["Create the first hypothesis-proposer todo."],
+        "successor_todos": [
+            _successor("review_research_contract", AUTO_RESEARCH_NEXT_HYPOTHESIS_SUCCESSOR_CONDITION, "hypothesis-proposer", "hypothesis_proposer", "propose_hypothesis", AUTO_RESEARCH_REFINED_HYPOTHESIS_SUCCESSOR_TEXT),
+        ],
     },
     "hypothesis_proposer": {
         "phase": "hypothesis",
@@ -149,8 +177,9 @@ AUTO_RESEARCH_ROLE_PROFILES: dict[str, dict[str, object]] = {
         "successor_todos": [
             _successor("summarize_evidence", AUTO_RESEARCH_HOLDOUT_SUCCESSOR_CONDITION, "research-curator", "research_curator", "review_research_contract", AUTO_RESEARCH_CURATOR_REVIEW_SUCCESSOR_TEXT),
             _successor("summarize_evidence", AUTO_RESEARCH_HOLDOUT_SUCCESSOR_CONDITION, "hypothesis-proposer", "hypothesis_proposer", "review_hypothesis_frontier", AUTO_RESEARCH_HYPOTHESIS_FRONTIER_REVIEW_SUCCESSOR_TEXT),
-            _successor("write_evaluation_summary", AUTO_RESEARCH_NEXT_HYPOTHESIS_SUCCESSOR_CONDITION, "hypothesis-proposer", "hypothesis_proposer", "propose_hypothesis", AUTO_RESEARCH_REFINED_HYPOTHESIS_SUCCESSOR_TEXT),
+            _successor("summarize_evidence", AUTO_RESEARCH_NEXT_HYPOTHESIS_SUCCESSOR_CONDITION, "research-curator", "research_curator", "review_research_contract", AUTO_RESEARCH_CURATOR_REVIEW_SUCCESSOR_TEXT),
             _successor("write_evaluation_summary", AUTO_RESEARCH_NEXT_HYPOTHESIS_SUCCESSOR_CONDITION, "research-curator", "research_curator", "review_research_contract", AUTO_RESEARCH_CURATOR_REVIEW_SUCCESSOR_TEXT),
+            _successor("review_promotion_readiness", AUTO_RESEARCH_NEXT_HYPOTHESIS_SUCCESSOR_CONDITION, "research-curator", "research_curator", "review_research_contract", AUTO_RESEARCH_CURATOR_REVIEW_SUCCESSOR_TEXT),
             _successor("review_promotion_readiness", AUTO_RESEARCH_HOLDOUT_SUCCESSOR_CONDITION, "research-curator", "research_curator", "review_research_contract", AUTO_RESEARCH_CURATOR_REVIEW_SUCCESSOR_TEXT),
             _successor("review_promotion_readiness", AUTO_RESEARCH_HOLDOUT_SUCCESSOR_CONDITION, "hypothesis-proposer", "hypothesis_proposer", "review_hypothesis_frontier", AUTO_RESEARCH_HYPOTHESIS_FRONTIER_REVIEW_SUCCESSOR_TEXT),
         ],
@@ -346,6 +375,7 @@ def auto_research_role_profile(*, role_id: str, goal_id: str, agent_id: str) -> 
         "worker_skill_scope": "role_specific_semantics_and_successor_todos_only",
         "default_kernel_skills_owner": "generic_multi_agent_kernel",
         "fixed_a2a_wake_prompt_owner": "generic_multi_agent_kernel",
+        "continuation_policy": dict(AUTO_RESEARCH_CONTINUATION_POLICY),
         "stop_conditions": [
             "quota says should_run=false or user_action_required=true",
             "frontier has no selected todo for this agent",

@@ -8,6 +8,7 @@ from .contract import (
     TODO_RESUME_KIND_TODO_DONE,
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_MONITOR,
+    TODO_TASK_CLASS_USER_ACTION,
     build_todo_id,
     normalize_required_capabilities,
     normalize_required_write_scopes,
@@ -42,6 +43,7 @@ from .projection import (
     todo_projection_sort_key as projection_todo_projection_sort_key,
 )
 from ..work_items.project_asset import build_project_asset_todo_summary
+from .user_gate import open_user_gate_todo_items
 
 
 MAX_STATUS_TODOS_PER_ROLE = 12
@@ -55,6 +57,7 @@ MAX_COMPLETED_SUCCESSION_WARNING_ITEMS = 5
 
 TODO_ITEM_SCHEMA_VERSION = "todo_item_v0"
 TODO_SUCCESSION_WARNING_SCHEMA_VERSION = "todo_succession_warning_v0"
+TODO_ARCHIVE_STATE_ACTIVE = "active"
 AttentionItemBuilder = Callable[..., dict[str, Any]]
 GoalLifecycleFields = Callable[[dict[str, Any], Optional[dict[str, Any]]], dict[str, Any]]
 PublicSafeText = Callable[..., Optional[str]]
@@ -84,6 +87,11 @@ def normalize_todo_text(text: str, *, limit: int = 500) -> str:
     return compact[: limit - 1].rstrip() + "…"
 
 
+def todo_archive_state(item: dict[str, Any]) -> str:
+    value = str(item.get("archive_state") or TODO_ARCHIVE_STATE_ACTIVE).strip()
+    return value or TODO_ARCHIVE_STATE_ACTIVE
+
+
 def active_state_todo_attention_item(
     goal: dict[str, Any],
     fields: dict[str, Any],
@@ -103,27 +111,59 @@ def active_state_todo_attention_item(
         fields.get("active_state_next_action"),
         limit=320,
     )
+    user_gate_items = open_user_gate_todo_items(user_todos)
+    user_gate_action = public_safe_compact_text(
+        user_gate_items[0].get("text") if user_gate_items else None,
+        limit=320,
+    )
     user_action = public_safe_compact_text(first_open_todo_text(user_todos), limit=320)
     agent_action = public_safe_compact_text(first_open_todo_text(agent_todos), limit=320)
+    agent_has_open = bool(agent_action or todo_summary_open_count(agent_todos) > 0)
     lifecycle_fields = goal_lifecycle_fields(goal, current_run)
     goal_id = str(goal.get("id") or "unknown-goal")
 
-    if user_action or todo_summary_open_count(user_todos) > 0:
+    if user_gate_action or user_gate_items:
         return attention_item(
             goal_id=goal_id,
-            status="active_state_user_todo",
+            status="active_state_user_gate",
             waiting_on="controller",
             severity="action",
             recommended_action=(
-                user_action
+                user_gate_action
                 or active_next_action
-                or "resolve the open user todo from the active goal state"
+                or "resolve the open user_gate todo from the active goal state"
             ),
             source="active_state",
             **lifecycle_fields,
         )
 
-    if agent_action or todo_summary_open_count(agent_todos) > 0:
+    if user_action or todo_summary_open_count(user_todos) > 0:
+        user_items = [
+            item
+            for item in (user_todos.get("first_open_items") if user_todos else []) or []
+            if isinstance(item, dict) and item.get("done") is not True
+        ]
+        explicit_user_actions_only = bool(user_items) and all(
+            str(item.get("task_class") or "").strip()
+            and projection_todo_item_task_class(item) == TODO_TASK_CLASS_USER_ACTION
+            for item in user_items
+        )
+        if not (agent_has_open and explicit_user_actions_only):
+            return attention_item(
+                goal_id=goal_id,
+                status="active_state_user_todo",
+                waiting_on="controller",
+                severity="action",
+                recommended_action=(
+                    user_action
+                    or active_next_action
+                    or "resolve the open user todo from the active goal state"
+                ),
+                source="active_state",
+                **lifecycle_fields,
+            )
+
+    if agent_has_open:
         return attention_item(
             goal_id=goal_id,
             status="active_state_agent_todo",
@@ -723,6 +763,8 @@ def todo_successor_todo_ids(
 
 
 def todo_item_is_succession_tracked_completion(item: dict[str, Any]) -> bool:
+    if todo_archive_state(item) != TODO_ARCHIVE_STATE_ACTIVE:
+        return False
     if not item.get("done"):
         return False
     if todo_item_is_deferred(item):
@@ -795,7 +837,12 @@ def compact_todo_group(
     if not items:
         return None
     items = [
-        structured_todo_item(item, role=role, source_section=source_section)
+        structured_todo_item(
+            item,
+            role=role,
+            source_section=source_section,
+            archive_state=todo_archive_state(item),
+        )
         if isinstance(item, dict)
         else item
         for item in items

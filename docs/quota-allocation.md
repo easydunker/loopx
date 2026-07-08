@@ -245,6 +245,14 @@ unchanged monitor polls are quiet no-spend checks with `should_run=false` and
 `effective_action=monitor_quiet_skip`. This keeps monitoring useful without
 letting it consume every eligible turn, and it keeps the hard routing rule in
 one small machine contract.
+When the current agent lane has only monitor work and no current, unclaimed, or
+other-agent advancement frontier, a future `next_due_at` is not enough to make
+the lane quiet. Quota must first project `autonomous_replan_required` unless a
+recent same-agent autonomous replan ACK carries a recognized frontier delta such
+as a runnable todo set, successor/supersede, blocker, watch-lane continuation,
+no-follow-up, active next action, or goal vision patch. Projected ACKs from a
+different agent lane are diagnostic only for this decision and cannot clear the
+current lane's empty-frontier obligation.
 
 Executable todos can also declare explicit write-scope requirements through
 todo metadata, for example `required_write_scopes=runner%2F%2A%2A` or the CLI
@@ -629,8 +637,8 @@ notification, make the turn a user-action gate, or leave the top-level
 `should_run` set for an otherwise quiet no-op.
 For every registered goal, `quota should-run` also includes a `todo_write_hint`
 so agent executors know to write newly discovered user/owner work with
-`loopx todo add --role user` instead of hiding it in `Next Action`,
-review docs, or chat.
+`loopx todo add --role user --task-class user_gate|user_action` instead of
+hiding it in `Next Action`, review docs, or chat.
 When available, `quota should-run` also keeps next-action signals separate:
 `active_state_next_action` is the durable `## Next Action`,
 `latest_run_recommended_action` is the latest non-agent-lane run's

@@ -117,7 +117,9 @@ loopx bootstrap \
 或 `/skills` 里的 `loopx` 命令 facade 进入；Claude Code 在 opt-in adapter
 安装后可用 `/loopx <任务>`，再用 `/loop` 推进。若某个 host 里看不到命令，先跑
 `loopx slash-commands` 查看当前命令清单；项目目标可用
-`loopx bootstrap-command-pack --project . --goal-text "<任务>"` 恢复同一语义。
+`loopx start-goal --guided --project . --goal-text "<任务>"` 从 shell 进入同一条
+agent-safe 路径。需要低层 handoff packet 的 host/plugin 集成仍可使用
+`loopx bootstrap-command-pack --project . --goal-text "<任务>"`。
 完整路由和恢复细节见 [Getting Started](docs/guides/getting-started.md) 与
 [host command registry contract](docs/reference/protocols/codex-app-host-command-registry-v0.md)。
 
@@ -249,13 +251,18 @@ LoopX 还在早期，最需要真实长期 agent 任务里的反馈：控制面�
   [GitHub Issue](https://github.com/huangruiteng/loopx/issues)。
 - 文档修正、showcase 补充、小型 public-safe 示例：欢迎直接开 PR。
 - 想快速交流、试用 onboarding、一起打磨 showcase：欢迎优先加入飞书用户群；
-  微信群作为备用入口，二维码可能过期，失效时请先走飞书或提 Issue 提醒更新。
+  实现问题和贡献协作可加入飞书开发群；微信群作为备用入口，二维码可能过期，
+  失效时请先走飞书或提 Issue 提醒更新。
 
 <table>
   <tr>
     <td align="center" width="240">
       <img src="docs/assets/loopx-lark-user-group.png" alt="LoopX 飞书用户群二维码" width="200"><br>
       飞书用户群
+    </td>
+    <td align="center" width="240">
+      <img src="docs/assets/loopx-lark-developer-group.png" alt="LoopX 飞书开发群二维码" width="200"><br>
+      飞书开发群
     </td>
     <td align="center" width="240">
       <img src="docs/assets/loopx-wechat-user-group.png" alt="LoopX 微信用户群二维码" width="200"><br>
@@ -311,7 +318,7 @@ benchmark 证据边界。
 
 ```bash
 loopx serve-status --global-registry --port 8766 --limit 80
-cd ~/loopx/apps/dashboard && npm install && npm run dev
+cd ~/loopx/apps/presentation/dashboard && npm install && npm run dev
 ```
 
 这个管理面保持保守：CLI 状态仍然是事实源，浏览器写入需要显式本地 opt-in，

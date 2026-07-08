@@ -16,6 +16,9 @@ sys.path.insert(0, str(REPO_ROOT))
 from loopx.capabilities.auto_research.knn_demo_workspace import (  # noqa: E402
     materialize_knn_demo_workspace,
 )
+from loopx.capabilities.auto_research.demo_e2e import (  # noqa: E402
+    _seed_visible_demo_control_plane,
+)
 from loopx.capabilities.auto_research.demo_supervisor import (  # noqa: E402
     build_auto_research_demo_supervisor_plan,
 )
@@ -79,6 +82,14 @@ def main() -> int:
         role["role_id"]: role["role_profile"]["visible_first_steps"]
         for role in supervisor["lanes"]
     }
+    continuation_policies = {
+        role["role_id"]: role["role_profile"]["continuation_policy"]
+        for role in supervisor["lanes"]
+    }
+    for policy in continuation_policies.values():
+        assert policy["successor_source"] == "role_profile.successor_todos", policy
+        assert policy["required_holdout_improvement_count"] == 2, policy
+        assert "no-follow-up" in policy["no_followup_rule"], policy
     assert "role-specific public-safe artifact" in " ".join(
         role_steps["research_curator"]
     ), role_steps
@@ -94,6 +105,24 @@ def main() -> int:
     assert "protected-scope cleanliness" in " ".join(
         role_steps["evaluator_promoter"]
     ), role_steps
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp = Path(temp_dir)
+        _visible_control, registry, _runtime_root = _seed_visible_demo_control_plane(
+            demo_root=temp,
+            goal_id="loopx-auto-research-knn-smoke",
+            objective=QUESTION,
+            supervisor=supervisor,
+            preset_context=preset,
+        )
+        registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+        goal = next(
+            item
+            for item in registry_payload["goals"]
+            if item["id"] == "loopx-auto-research-knn-smoke"
+        )
+        assert "solution.py" in goal["coordination"]["write_scope"], goal
+        assert "benchmark_runner" in goal["coordination"]["available_capabilities"], goal
 
     markdown_result = subprocess.run(
         [

@@ -157,6 +157,12 @@ def main() -> int:
         legacy_canary.chmod(0o755)
         (bin_dir / "goal-harness").symlink_to(legacy_goal_harness)
         (bin_dir / "goal-harness-canary").symlink_to(legacy_canary)
+        stale_loopx = bin_dir / "loopx"
+        stale_loopx.write_text("#!/usr/bin/env bash\nexit 99\n", encoding="utf-8")
+        stale_loopx.chmod(0o755)
+        stale_canary_target = root / "stale-canary-target"
+        stale_canary_target.mkdir()
+        (bin_dir / "loopx-canary").symlink_to(stale_canary_target)
         codex_home = home / ".codex"
         profile = home / ".zshrc"
         assert_release_snapshot_source_fallback(root)
@@ -207,9 +213,9 @@ def main() -> int:
         runtime_package = release_root / "loopx" / "control_plane" / "runtime"
         assert (runtime_package / "run_compaction.py").is_file(), release_root
         assert (runtime_package / "session_runtime.py").is_file(), release_root
-        dashboard_page = release_root / "apps" / "dashboard" / "src" / "views" / "dashboard-page.tsx"
-        action_packet = release_root / "apps" / "dashboard" / "src" / "data" / "action-packet.ts"
-        dashboard_node_modules = release_root / "apps" / "dashboard" / "node_modules"
+        dashboard_page = release_root / "apps" / "presentation" / "dashboard" / "src" / "views" / "dashboard-page.tsx"
+        action_packet = release_root / "apps" / "presentation" / "dashboard" / "src" / "data" / "action-packet.ts"
+        dashboard_node_modules = release_root / "apps" / "presentation" / "dashboard" / "node_modules"
         assert dashboard_page.is_file(), dashboard_page
         assert action_packet.is_file(), action_packet
         assert not dashboard_node_modules.exists(), dashboard_node_modules
@@ -232,6 +238,7 @@ def main() -> int:
         assert release_manifest["skills"]["items"]["loopx-project"]["sha256"], release_manifest
         canary_wrapper = bin_dir / "loopx-canary"
         assert canary_wrapper.is_symlink(), canary_wrapper
+        assert not (stale_canary_target / "loopx-canary").exists(), stale_canary_target
         assert not (bin_dir / "goal-harness-canary").exists()
         assert (bin_dir / "goal-harness-canary.legacy-disabled").is_symlink()
         assert canary_wrapper.resolve() == REPO_ROOT / "scripts" / "loopx", canary_wrapper.resolve()

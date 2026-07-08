@@ -42,7 +42,7 @@ plane, not hidden autonomy.
 [User Manual](https://my.feishu.cn/wiki/CaL5wMk9ui17ngkWzeUcMlAYnZg) ·
 [Showcases](docs/showcases/README.md) · [Release Readiness](docs/product/release-readiness.md) ·
 [Update Notes](docs/update-notes/README.md) · [Community](#community--feedback) ·
-[Product Vision](docs/product/vision.md) · [Dashboard](apps/dashboard/README.md)
+[Product Vision](docs/product/vision.md) · [Dashboard](apps/presentation/dashboard/README.md)
 
 </details>
 
@@ -159,10 +159,11 @@ Command registration is host-specific, but the state path is not. Codex
 surfaces may expose LoopX through `$loopx` or `/skills` command facades before
 native `/loopx` exists; Claude Code can expose `/loopx <task>` after its opt-in
 adapter is installed. If a host command is missing, run `loopx slash-commands`
-for the current catalog or recover a project goal with
-`loopx bootstrap-command-pack --project . --goal-text "<task>"`. Full routing
-and recovery details live in [Getting Started](docs/guides/getting-started.md)
-and the
+for the current catalog or start the same agent-safe path from a shell with
+`loopx start-goal --guided --project . --goal-text "<task>"`. Host and plugin
+integrations that need the lower-level handoff packet can still use
+`loopx bootstrap-command-pack --project . --goal-text "<task>"`. Full routing and
+recovery details live in [Getting Started](docs/guides/getting-started.md) and the
 [host command registry contract](docs/reference/protocols/codex-app-host-command-registry-v0.md).
 
 ### Codex App
@@ -502,7 +503,7 @@ agent, operator, and domain-specific surfaces.
 | Goal state and status | Tracks active state, todos, claims, gates, evidence, run history, and first-screen attention. | `loopx status`, `loopx diagnose`, `loopx review-packet` |
 | Quota and interaction contract | Decides whether a turn should deliver, ask the user, wait for evidence, self-repair, or stay quiet. | `loopx quota should-run`, [quota allocation](docs/quota-allocation.md) |
 | Agent runtime bridges | Keeps Codex App heartbeats, Codex CLI TUI loops, Claude Code `/loop`, and generic worker bridges aligned with the same guard. | `loopx heartbeat-prompt`, `loopx codex-cli-bootstrap-message`, `loopx worker-bridge` |
-| Operator surfaces | Renders compact project status for humans without making the browser the source of truth. | `loopx serve-status`, [dashboard](apps/dashboard/README.md), [frontstage](https://huangruiteng.github.io/loopx/frontstage/) |
+| Operator surfaces | Renders compact project status for humans without making the browser the source of truth. | `loopx serve-status`, [dashboard](apps/presentation/dashboard/README.md), [frontstage](https://huangruiteng.github.io/loopx/frontstage/) |
 | External projections | Projects LoopX todos and gates into collaboration surfaces while LoopX remains the state authority. | `loopx lark-kanban`, [Lark Kanban adapter](docs/lark-kanban-control-plane-adapter.md) |
 | Domain adapters | Packages repeatable work lanes such as issue fixing, content operations, value connector planning, ML experiment advice, and benchmark evidence. | `loopx issue-fix`, `loopx content-ops`, `loopx value-connectors`, `loopx ml-experiment`, `loopx benchmark` |
 | Governance patterns | Captures recurring good/bad interaction shapes so new capabilities do not become one-off prompt branches. | [pattern catalog](docs/interaction-pattern-catalog.md), [state model](docs/state-interaction-model.md) |
@@ -520,16 +521,21 @@ heavy, and which user gates or handoffs still disappeared from view.
 - Use [GitHub Issues](https://github.com/huangruiteng/loopx/issues) for
   reproducible bugs, install problems, and feature requests.
 - Open PRs for docs fixes, showcase writeups, and small public-safe examples.
-- For Chinese-speaking early users, scan the Lark group first for fast
-  onboarding help, feedback loops, and showcase co-creation. A WeChat group QR
-  is available as a backup, but QR codes may expire; if one is stale, use Lark
-  or open an issue to ask for a refresh.
+- For Chinese-speaking early users, scan the Lark user group first for fast
+  onboarding help, feedback loops, and showcase co-creation. Use the Lark
+  developer group for implementation questions and contributor coordination. A
+  WeChat group QR is available as a backup, but QR codes may expire; if one is
+  stale, use Lark or open an issue to ask for a refresh.
 
 <table>
   <tr>
     <td align="center" width="240">
       <img src="docs/assets/loopx-lark-user-group.png" alt="LoopX Lark user group QR code" width="200"><br>
-      Lark group
+      Lark user group
+    </td>
+    <td align="center" width="240">
+      <img src="docs/assets/loopx-lark-developer-group.png" alt="LoopX Lark developer group QR code" width="200"><br>
+      Lark developer group
     </td>
     <td align="center" width="240">
       <img src="docs/assets/loopx-wechat-user-group.png" alt="LoopX WeChat user group QR code" width="200"><br>
@@ -615,7 +621,7 @@ should make the loop easier to inspect, but LoopX remains the source of truth:
 
 ```bash
 loopx serve-status --global-registry --port 8766 --limit 80
-cd ~/loopx/apps/dashboard && npm install && npm run dev
+cd ~/loopx/apps/presentation/dashboard && npm install && npm run dev
 ```
 
 Before publishing public docs or examples, keep the public/private boundary
@@ -632,7 +638,7 @@ More detail lives in [Getting Started](docs/guides/getting-started.md);
 contracts live in [Status Data](docs/status-data-contract.md),
 [Quota Allocation](docs/quota-allocation.md), and
 [Public/Private Boundary](docs/public-private-boundary.md). For the local UI,
-see the [dashboard guide](apps/dashboard/README.md).
+see the [dashboard guide](apps/presentation/dashboard/README.md).
 
 ## Product Vision
 

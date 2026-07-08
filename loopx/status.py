@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 from pathlib import Path
 import re
@@ -12,7 +11,15 @@ from .benchmark_adapters.skillsbench_signals import (
 from .benchmark_adapters.skillsbench_verifier_bootstrap import (
     apply_skillsbench_verifier_bootstrap_missing_score_attribution,
 )
-from .control_plane import compact_control_plane_policy, control_plane_policy_summary
+from .control_plane import compact_control_plane_policy
+from .control_plane.status_collection import (
+    StatusCollectionContext,
+    collect_status as _collect_status_read_model,
+)
+from .control_plane.status_runtime_summaries import (
+    StatusRuntimeSummaryContext,
+    build_status_runtime_summaries as _build_status_runtime_summaries_read_model,
+)
 from .contract import check_contract
 from .control_plane.work_items.delivery_batch_scale import (
     SMALL_DELIVERY_BATCH_SCALES as STRUCTURED_SMALL_DELIVERY_BATCH_SCALES,
@@ -33,17 +40,16 @@ from .doctor import (
 from .execution_profile import (
     compact_execution_profile,
     execution_profile_outcome_floor,
-    execution_profile_summary,
 )
-from .frontstage import build_goal_channel_projection
+from .control_plane.goals.goal_channel_projection import build_goal_channel_projection
 from .handoff_budget import handoff_budget_contract
 from .history import collect_history, load_registry
 from .history import STATUS_NEUTRAL_CLASSIFICATIONS as HISTORY_STATUS_NEUTRAL_CLASSIFICATIONS
 from .interface_budget import interface_budget_cadence_for_runs
-from .long_task_cadence import build_long_task_cadence_hint, long_task_cadence_hint_summary
+from .long_task_cadence import build_long_task_cadence_hint
 from .materials import extract_review_materials
 from .operator_gate import DEFAULT_OPERATOR_GATE, default_operator_question, normalize_operator_question
-from .orchestration import compact_orchestration_policy, orchestration_policy_summary
+from .orchestration import compact_orchestration_policy
 from .paths import global_registry_path, resolve_runtime_root
 from .control_plane.work_items.task_graph import (
     TASK_GRAPH_MAX_USER_GATE_NODES,
@@ -55,6 +61,7 @@ from .control_plane.work_items.project_asset import (
     PROJECT_ASSET_TODO_PROJECTION_GAP_SCHEMA_VERSION,
     TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION,
     TODO_PROJECTION_VIEW_SCHEMA_VERSION,
+    attach_active_state_project_asset_fields as _attach_active_state_project_asset_fields,
     build_project_asset,
     enrich_project_asset as _enrich_project_asset_read_model,
     project_asset_handoff_check_projection,
@@ -111,6 +118,8 @@ from .control_plane.work_items.attention_item import (
     attention_item as _attention_item_read_model,
 )
 from .control_plane.work_items.attention_queue import (
+    AttentionQueueContext,
+    build_attention_queue as _build_attention_queue_read_model,
     build_attention_queue_projection as _build_attention_queue_projection_read_model,
     merge_global_registry_findings as _merge_global_registry_findings_read_model,
 )
@@ -173,19 +182,18 @@ from .control_plane.runtime.run_compaction import (
     compact_run_base as _compact_run_base_read_model,
 )
 from .control_plane.runtime.public_safety import (
+    compact_loopx_command_records as _compact_loopx_command_records,
+    compact_numeric_map as _compact_numeric_map,
     public_safe_compact_list,
     public_safe_compact_text,
 )
+from .control_plane.runtime.time import parse_timestamp
 from .control_plane.runtime.run_history import (
-    build_run_history as _build_run_history_read_model,
     latest_run as _latest_run_read_model,
 )
 from .control_plane.runtime.event_ledger import (
     EVENT_LEDGER_CLASSES,
-    EVENT_LEDGER_PROXY_NOTE,
-    blank_event_class_counts,
-    blank_event_ledger_goal,
-    build_event_ledger_summary as _build_event_ledger_summary_read_model,
+    blank_event_class_counts as _blank_event_class_counts_read_model,
     event_ledger_event_class as _event_ledger_event_class_read_model,
 )
 from .control_plane.runtime.decision_freshness import (
@@ -199,7 +207,6 @@ from .control_plane.runtime.decision_freshness import (
 )
 from .control_plane.runtime.promotion_readiness import (
     PROMOTION_READINESS_PROXY_NOTE,
-    build_promotion_readiness_summary as _build_promotion_readiness_summary_read_model,
 )
 from .control_plane.handoff.handoff_runs import (
     is_custom_post_handoff_work_run as _is_custom_post_handoff_work_run_read_model,
@@ -214,6 +221,7 @@ from .control_plane.goals.global_registry_health import (
     collect_global_registry_health as _collect_global_registry_health_read_model,
     global_registry_finding,
 )
+from .control_plane.goals.path_resolution import resolve_goal_local_path, same_path
 from .control_plane.goals.goal_channel import (
     attach_goal_channel_projection as _attach_goal_channel_projection_read_model,
 )
@@ -235,9 +243,6 @@ from .control_plane.runtime.session_runtime import (
     compact_session_runtime_projection_from_run,
     compact_session_runtime_readonly_projection,
     legacy_runtime_goal_attention as _legacy_runtime_goal_attention_read_model,
-    session_runtime_projection_attention as _session_runtime_projection_attention_read_model,
-    session_runtime_status_label as _session_runtime_status_label_read_model,
-    session_runtime_status_waiting_on as _session_runtime_status_waiting_on_read_model,
 )
 from .control_plane.agents.subagent_activity import (
     MAX_SUBAGENT_ACTIVITY_ITEMS,
@@ -298,12 +303,10 @@ from .control_plane.todos.todo_index import (
     MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
     TODO_INDEX_ITEM_SCHEMA_VERSION,
     TODO_INDEX_SCHEMA_VERSION,
-    build_todo_index as _build_todo_index_read_model,
 )
 from .control_plane.quota.usage_summary import (
     USAGE_PROXY_NOTE,
     blank_usage_goal,
-    build_usage_summary as _build_usage_summary_read_model,
     is_automation_run,
     is_progress_signal_run,
     quota_spend_slots,
@@ -311,19 +314,8 @@ from .control_plane.quota.usage_summary import (
 from .promotion_gate import build_promotion_gate
 from .quota import quota_status, quota_with_handoff_outcome_floor
 from .registry import registry_goals
-from .renderers.status_markdown import (
-    append_attention_queue_item_header_markdown as _append_attention_queue_item_header_markdown,
-    append_attention_queue_summary_markdown as _append_attention_queue_summary_markdown,
-    append_decision_freshness_summary_markdown as _append_decision_freshness_summary_markdown,
-    append_event_ledger_summary_markdown as _append_event_ledger_summary_markdown,
-    append_human_reward_markdown as _append_human_reward_markdown,
-    append_operator_gate_resume_contract_markdown as _append_operator_gate_resume_contract_markdown,
-    append_promotion_gate_markdown as _append_promotion_gate_markdown,
-    append_promotion_readiness_summary_markdown as _append_promotion_readiness_summary_markdown,
-    append_usage_summary_markdown as _append_usage_summary_markdown,
-    authority_registry_markdown_summary as _authority_registry_markdown_summary,
-    goals_by_id as _goals_by_id,
-    markdown_scalar as _markdown_scalar,
+from .presentation.renderers.status_markdown import (
+    render_status_markdown as _render_status_markdown,
 )
 from .rollout_event_log import load_rollout_events, rollout_event_log_path
 from .state_projection import (
@@ -490,6 +482,49 @@ EVENT_LEDGER_EVIDENCE_HINTS = (
     "monitor",
     "validation",
 )
+
+
+def decision_event_kinds(run: dict[str, Any]) -> list[str]:
+    return _decision_event_kinds_read_model(
+        run,
+        decision_classifications=EVENT_LEDGER_DECISION_CLASSIFICATIONS,
+        classification_prefixes=DECISION_FRESHNESS_CLASSIFICATION_PREFIXES,
+    )
+
+
+def blank_event_class_counts() -> dict[str, int]:
+    return _blank_event_class_counts_read_model(EVENT_LEDGER_CLASSES)
+
+
+def event_ledger_event_class(run: dict[str, Any]) -> str:
+    return _event_ledger_event_class_read_model(
+        run,
+        compact_benchmark_run=compact_benchmark_run,
+        compact_benchmark_result=compact_benchmark_result,
+        compact_benchmark_comparison=compact_benchmark_comparison,
+        compact_benchmark_learning_ledger=compact_benchmark_learning_ledger,
+        compact_benchmark_experiment_report=compact_benchmark_experiment_report,
+        compact_active_user_assisted_pilot=compact_active_user_assisted_pilot,
+        run_has_external_evidence_watch_signal=run_has_external_evidence_watch_signal,
+        decision_classifications=EVENT_LEDGER_DECISION_CLASSIFICATIONS,
+        evidence_classifications=EVENT_LEDGER_EVIDENCE_CLASSIFICATIONS,
+        evidence_hints=EVENT_LEDGER_EVIDENCE_HINTS,
+        state_classifications=EVENT_LEDGER_STATE_CLASSIFICATIONS,
+    )
+
+
+def build_decision_freshness_summary(history: dict[str, Any]) -> dict[str, Any]:
+    return _build_decision_freshness_summary_read_model(
+        history,
+        parse_timestamp=parse_timestamp,
+        decision_event_kinds=decision_event_kinds,
+        event_class_for_run=event_ledger_event_class,
+        blank_event_class_counts=blank_event_class_counts,
+        window_days=DECISION_FRESHNESS_WINDOW_DAYS,
+        item_limit=DECISION_FRESHNESS_ITEM_LIMIT,
+        proxy_note=DECISION_FRESHNESS_PROXY_NOTE,
+    )
+
 DELIVERY_BATCH_SCALE_TEST_ONLY_CLASSIFICATION_HINTS = (
     "_test",
     "_smoke",
@@ -581,60 +616,6 @@ AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS = {
 AUTONOMOUS_RUN_HISTORY_STALL_PATTERN = re.compile(
     r"(?i)(?:monitor|observe|observation|poll|watch|quiet|no[-_ ]?op|no[-_ ]?progress|stalled?|unchanged|dependency|停转|无进展|重复|反复|观察|轮询)"
 )
-
-
-def _compact_numeric_map(value: Any, *, keys: tuple[str, ...] | None = None) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    source = value
-    selected_keys = keys or tuple(str(key) for key in source.keys())
-    compact: dict[str, Any] = {}
-    for key in selected_keys:
-        raw = source.get(key)
-        if isinstance(raw, bool) or raw is None:
-            continue
-        if isinstance(raw, (int, float)):
-            compact[key] = raw
-            continue
-        try:
-            if isinstance(raw, str) and raw.strip():
-                compact[key] = float(raw) if "." in raw else int(raw)
-        except ValueError:
-            continue
-    return compact
-
-
-def _compact_loopx_command_records(value: Any, *, limit: int = 128) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        return []
-    allowed_subcommands = {
-        "quota should-run",
-        "todo claim",
-        "todo update",
-        "todo complete",
-        "refresh-state",
-        "quota spend-slot",
-        "status",
-        "diagnose",
-    }
-    records: list[dict[str, str]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        subcommand = public_safe_compact_text(item.get("subcommand"), limit=80)
-        if subcommand not in allowed_subcommands:
-            continue
-        record: dict[str, str] = {"subcommand": subcommand}
-        todo_id = public_safe_compact_text(item.get("todo_id"), limit=100)
-        if todo_id and re.match(r"^todo_[A-Za-z0-9_-]{6,80}$", todo_id):
-            record["todo_id"] = todo_id
-        goal_id = public_safe_compact_text(item.get("goal_id"), limit=140)
-        if goal_id and re.match(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$", goal_id):
-            record["goal_id"] = goal_id
-        records.append(record)
-        if len(records) >= limit:
-            break
-    return records
 
 
 def _compact_benchmark_case_event_timeline(value: Any) -> dict[str, Any]:
@@ -1067,7 +1048,7 @@ def build_skillsbench_post_run_debug_gate(
                 public_safe_compact_text(lifecycle.get("missing_reason"), limit=140)
                 or "loopx_lifecycle_incomplete"
             )
-    elif closeout_status in {"missing", "partial"}:
+    elif closeout_status in {"missing", "partial"} and not case_closeout_complete:
         attribution_layer = "loopx_lifecycle"
         first_blocker = "loopx_closeout_incomplete"
     elif runner_recovery_blocked:
@@ -2544,6 +2525,10 @@ def _compact_benchmark_task_setup_preflight(value: Any) -> dict[str, Any]:
         "task_id",
         "first_blocker",
         "alternate_source_kind",
+        "canonical_equivalent_status",
+        "registry_source_kind",
+        "registry_source_status",
+        "registry_task_path",
         "selection_recommendation",
     ):
         text = public_safe_compact_text(value.get(field), limit=180)
@@ -2565,6 +2550,9 @@ def _compact_benchmark_task_setup_preflight(value: Any) -> dict[str, Any]:
         "dockerfile_present",
         "canonical_task_present",
         "alternate_source_supported_by_runner",
+        "registry_task_present",
+        "registry_task_path_recorded",
+        "registry_excluded",
         "task_source_path_recorded",
         "task_source_content_recorded",
         "bootstrap_light_candidate_eligible",
@@ -6246,37 +6234,27 @@ def compact_post_handoff_run(run: dict[str, Any], profile: dict[str, Any] | None
         run,
         delivery_outcome=outcome,
     )
-    benchmark_run = compact_benchmark_run(run)
-    if benchmark_run:
-        compact["benchmark_run_summary"] = benchmark_run
-        health_note = worker_bridge_ingest_health_note(benchmark_run)
-        if health_note:
-            compact["worker_bridge_ingest_health_note"] = health_note
-    benchmark_result = compact_benchmark_result(run)
-    if benchmark_result:
-        compact["benchmark_result_summary"] = benchmark_result
-    benchmark_comparison = compact_benchmark_comparison(run)
-    if benchmark_comparison:
-        compact["benchmark_comparison_summary"] = benchmark_comparison
-        decision_note = benchmark_comparison_decision_note(benchmark_comparison)
-        if decision_note:
-            compact["benchmark_comparison_decision_note"] = decision_note
-    benchmark_learning_ledger = compact_benchmark_learning_ledger(run)
-    if benchmark_learning_ledger:
-        compact["benchmark_learning_ledger_summary"] = benchmark_learning_ledger
-    benchmark_report = compact_benchmark_experiment_report(run)
-    if benchmark_report:
-        compact["benchmark_experiment_report_summary"] = benchmark_report
-        readiness_note = benchmark_experiment_report_readiness_note(benchmark_report)
-        if readiness_note:
-            compact["benchmark_experiment_report_readiness_note"] = readiness_note
-            replay_decision = benchmark_experiment_report_replay_decision(readiness_note)
-            if replay_decision:
-                compact["benchmark_experiment_report_replay_decision"] = replay_decision
-    active_user_pilot = compact_active_user_assisted_pilot(run)
-    if active_user_pilot:
-        compact["active_user_assisted_pilot_summary"] = active_user_pilot
-    return compact
+    return _attach_run_summary_projections_read_model(
+        compact,
+        run,
+        compact_benchmark_run=compact_benchmark_run,
+        worker_bridge_ingest_health_note=worker_bridge_ingest_health_note,
+        compact_benchmark_result=compact_benchmark_result,
+        compact_benchmark_comparison=compact_benchmark_comparison,
+        benchmark_comparison_decision_note=benchmark_comparison_decision_note,
+        compact_benchmark_learning_ledger=compact_benchmark_learning_ledger,
+        compact_benchmark_experiment_report=compact_benchmark_experiment_report,
+        benchmark_experiment_report_readiness_note=(
+            benchmark_experiment_report_readiness_note
+        ),
+        benchmark_experiment_report_replay_decision=(
+            benchmark_experiment_report_replay_decision
+        ),
+        compact_active_user_assisted_pilot=compact_active_user_assisted_pilot,
+        compact_session_runtime_projection_from_run=(
+            compact_session_runtime_projection_from_run
+        ),
+    )
 
 
 def small_delivery_batch_scale_streak(runs: list[dict[str, Any]]) -> int:
@@ -6508,34 +6486,6 @@ def merge_global_registry_attention_findings(
     )
 
 
-def parse_timestamp(value: Any) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def same_path(left: Path, right: Path) -> bool:
-    return left.expanduser().resolve() == right.expanduser().resolve()
-
-
-def resolve_goal_local_path(raw: Any, goal: dict[str, Any], *, fallback_base: Path) -> Path | None:
-    if not raw:
-        return None
-    path = Path(str(raw)).expanduser()
-    if path.is_absolute():
-        return path
-    repo = goal.get("repo")
-    if repo:
-        return Path(str(repo)).expanduser() / path
-    return fallback_base / path
-
-
 def collect_global_registry_health(
     *,
     registry_path: Path,
@@ -6719,37 +6669,6 @@ def legacy_runtime_goal_attention(
     )
 
 
-def session_runtime_status_waiting_on(value: Any, *, monitor_only: bool = False) -> str:
-    return _session_runtime_status_waiting_on_read_model(
-        value,
-        monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
-        monitor_only=monitor_only,
-    )
-
-
-def session_runtime_status_label(projection: dict[str, Any]) -> str:
-    return _session_runtime_status_label_read_model(
-        projection,
-        public_safe_compact_text=public_safe_compact_text,
-    )
-
-
-def session_runtime_projection_attention(
-    goal: dict[str, Any],
-    current_run: dict[str, Any] | None,
-    projection: dict[str, Any],
-) -> dict[str, Any]:
-    return _session_runtime_projection_attention_read_model(
-        goal,
-        current_run,
-        projection,
-        public_safe_compact_text=public_safe_compact_text,
-        attention_item=attention_item,
-        goal_lifecycle_fields=goal_lifecycle_fields,
-        monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
-    )
-
-
 def goal_attention(goal: dict[str, Any]) -> dict[str, Any] | None:
     return _goal_attention_read_model(
         goal,
@@ -6760,11 +6679,12 @@ def goal_attention(goal: dict[str, Any]) -> dict[str, Any] | None:
         goal_lifecycle_fields=goal_lifecycle_fields,
         legacy_runtime_goal_attention=legacy_runtime_goal_attention,
         compact_session_runtime_projection_from_run=compact_session_runtime_projection_from_run,
-        session_runtime_projection_attention=session_runtime_projection_attention,
+        public_safe_compact_text=public_safe_compact_text,
         attention_item=attention_item,
         run_has_external_evidence_watch_signal=run_has_external_evidence_watch_signal,
         default_operator_question=default_operator_question,
         normalize_operator_question=normalize_operator_question,
+        monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
         default_operator_gate=DEFAULT_OPERATOR_GATE,
         planned_controller_opt_in_recommended_action=PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION,
         connected_adapter_statuses=CONNECTED_ADAPTER_STATUSES,
@@ -6821,237 +6741,46 @@ def build_attention_queue(
     include_task_graph: bool = False,
     goal_id_filter: str | None = None,
 ) -> dict[str, Any]:
-    health_items: list[dict[str, Any]] = []
-    history_items: list[dict[str, Any]] = []
-    if contract.get("ok") is False:
-        health_items.append(
-            attention_item(
-                goal_id="loopx-contract",
-                status="contract_check_failed",
-                waiting_on="codex",
-                severity="high",
-                recommended_action="fix contract errors before advancing goal adapters",
-                source="contract",
-            )
-        )
-
-    for goal in history.get("goals") or []:
-        if not isinstance(goal, dict):
-            continue
-        active_state_fields: dict[str, Any] | None = None
-        active_state_item: dict[str, Any] | None = None
-        current_status_run = latest_run(goal)
-        goal_latest_runs = goal.get("latest_runs") if isinstance(goal.get("latest_runs"), list) else []
-        if goal.get("registry_member"):
-            active_state_fields = active_state_todo_fields(goal, runtime_root=runtime_root)
-            active_state_item = active_state_todo_attention_item(goal, active_state_fields, current_status_run)
-        if active_state_item and active_state_item.get("waiting_on") in {"controller", "user_or_controller"}:
-            item = active_state_item
-        else:
-            item = goal_attention(goal)
-            if not item:
-                item = active_state_item
-        if item:
-            agent_lane_recommendation = compact_agent_lane_recommendation(
-                latest_agent_lane_run(goal)
-            )
-            active_state_next_action = (
-                active_state_fields.get("active_state_next_action")
-                if isinstance(active_state_fields, dict)
-                else None
-            )
-            latest_run_action, latest_run_action_source = latest_run_recommended_action_for_projection(
-                current_status_run=current_status_run,
-                agent_lane_recommendation=agent_lane_recommendation,
-                active_state_next_action=active_state_next_action,
-                preferred_agent_id=(
-                    goal.get("coordination", {}).get("primary_agent")
-                    if isinstance(goal.get("coordination"), dict)
-                    else None
-                ),
-            )
-            if latest_run_action:
-                item["latest_run_recommended_action"] = latest_run_action
-                if latest_run_action_source:
-                    item["latest_run_recommended_action_source"] = latest_run_action_source
-                if isinstance(item.get("project_asset"), dict):
-                    item["project_asset"]["latest_run_recommended_action"] = latest_run_action
-                    if latest_run_action_source:
-                        item["project_asset"][
-                            "latest_run_recommended_action_source"
-                        ] = latest_run_action_source
-            replan_ack = compact_autonomous_replan_ack(
-                current_status_run
-            ) or latest_autonomous_replan_ack_for_projection(goal_latest_runs)
-            if replan_ack:
-                item["autonomous_replan_ack"] = replan_ack
-                if isinstance(item.get("project_asset"), dict):
-                    item["project_asset"]["autonomous_replan_ack"] = replan_ack
-            control_plane = compact_control_plane_policy(goal.get("control_plane"))
-            if control_plane:
-                item["control_plane"] = control_plane
-            if agent_lane_recommendation:
-                item["agent_lane_recommendation"] = agent_lane_recommendation
-            subagent_activity = subagent_activity_for_goal(goal)
-            interface_budget_cadence = interface_budget_cadence_for_runs(goal_latest_runs)
-            projection_warning = active_state_projection_warning(goal, latest_run(goal))
-            enrich_project_asset(
-                item,
-                latest_validation=project_asset_latest_validation(latest_run(goal)),
-                latest_runs=goal_latest_runs,
-                execution_profile=(
-                    goal.get("execution_profile")
-                    if isinstance(goal.get("execution_profile"), dict)
-                    else None
-                ),
-                orchestration=(
-                    goal.get("spawn_policy")
-                    if isinstance(goal.get("spawn_policy"), dict)
-                    else None
-                ),
-                subagent_activity=subagent_activity,
-                interface_budget_cadence=interface_budget_cadence,
-            )
-            if control_plane and isinstance(item.get("project_asset"), dict):
-                item["project_asset"]["control_plane"] = control_plane
-            if agent_lane_recommendation and isinstance(item.get("project_asset"), dict):
-                item["project_asset"]["agent_lane_recommendation"] = agent_lane_recommendation
-            if projection_warning:
-                item["stale_latest_run_warning"] = projection_warning
-                if isinstance(item.get("project_asset"), dict):
-                    item["project_asset"]["stale_latest_run_warning"] = projection_warning
-            if goal.get("registry_member"):
-                if active_state_fields is None:
-                    active_state_fields = active_state_todo_fields(goal, runtime_root=runtime_root)
-                item.update(active_state_fields)
-                if isinstance(item.get("project_asset"), dict):
-                    active_next_action = item.get("active_state_next_action")
-                    if active_next_action:
-                        item["project_asset"]["active_state_next_action"] = active_next_action
-                    issue_meta_surface = (
-                        item.get("issue_meta_surface")
-                        if isinstance(item.get("issue_meta_surface"), dict)
-                        else None
-                    )
-                    if issue_meta_surface:
-                        item["project_asset"]["issue_meta_surface"] = issue_meta_surface
-                    next_action_warning = next_action_projection_warning(
-                        active_state_next_action=active_next_action,
-                        latest_run_recommended_action=item.get("latest_run_recommended_action"),
-                    )
-                    if next_action_warning:
-                        item["next_action_projection_warning"] = next_action_warning
-                        item["project_asset"]["next_action_projection_warning"] = next_action_warning
-                sync_connected_attention_action_from_todos(item)
-                backlog_warning = (
-                    item.get("backlog_hygiene_warning")
-                    if isinstance(item.get("backlog_hygiene_warning"), dict)
-                    else None
-                )
-                if backlog_warning and isinstance(item.get("project_asset"), dict):
-                    item["project_asset"]["backlog_hygiene_warning"] = backlog_warning
-                projection_gap = (
-                    item.get("state_projection_gap")
-                    if isinstance(item.get("state_projection_gap"), dict)
-                    else None
-                )
-                if projection_gap and isinstance(item.get("project_asset"), dict):
-                    item["project_asset"]["state_projection_gap"] = projection_gap
-                archive_warning = (
-                    item.get("completed_todo_archive_warning")
-                    if isinstance(item.get("completed_todo_archive_warning"), dict)
-                    else None
-                )
-                if archive_warning and isinstance(item.get("project_asset"), dict):
-                    item["project_asset"]["completed_todo_archive_warning"] = archive_warning
-                replan_obligation = (
-                    item.get("autonomous_replan_obligation")
-                    if isinstance(item.get("autonomous_replan_obligation"), dict)
-                    else None
-                )
-                if not replan_obligation:
-                    replan_obligation = autonomous_replan_obligation_from_runs(
-                        goal_latest_runs,
-                        agent_todos=item.get("agent_todos")
-                        if isinstance(item.get("agent_todos"), dict)
-                        else None,
-                    )
-                    if replan_obligation:
-                        item["autonomous_replan_obligation"] = replan_obligation
-                if replan_obligation and isinstance(item.get("project_asset"), dict):
-                    item["project_asset"]["autonomous_replan_obligation"] = replan_obligation
-                item["quota"] = quota_status(
-                    goal,
-                    waiting_on=str(item.get("waiting_on") or ""),
-                    severity=str(item.get("severity") or ""),
-                    lifecycle_phase=item.get("lifecycle_phase"),
-                    lifecycle_flags=item.get("lifecycle_flags"),
-                    status=item.get("status"),
-                )
-                enrich_project_asset(
-                    item,
-                    user_todos=item.get("user_todos") if isinstance(item.get("user_todos"), dict) else None,
-                    agent_todos=item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else None,
-                    quota=item.get("quota") if isinstance(item.get("quota"), dict) else None,
-                    latest_runs=goal_latest_runs,
-                    subagent_activity=subagent_activity,
-                    interface_budget_cadence=interface_budget_cadence,
-                )
-                guarded_quota = quota_with_handoff_outcome_floor(
-                    item.get("quota") if isinstance(item.get("quota"), dict) else {},
-                    waiting_on=str(item.get("waiting_on") or ""),
-                    project_asset=item.get("project_asset")
-                    if isinstance(item.get("project_asset"), dict)
-                    else None,
-                    handoff_readiness=item.get("handoff_readiness")
-                    if isinstance(item.get("handoff_readiness"), dict)
-                    else None,
-                )
-                if guarded_quota != item.get("quota"):
-                    item["quota"] = guarded_quota
-                    enrich_project_asset(
-                        item,
-                        user_todos=item.get("user_todos") if isinstance(item.get("user_todos"), dict) else None,
-                        agent_todos=item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else None,
-                        quota=guarded_quota,
-                        latest_runs=goal_latest_runs,
-                        subagent_activity=subagent_activity,
-                        interface_budget_cadence=interface_budget_cadence,
-                    )
-                sync_connected_attention_action_from_todos(item)
-                normalize_monitor_quiet_attention_display(item)
-            if include_task_graph:
-                task_graph_projection = build_task_graph_projection(
-                    item,
-                    goal=goal,
-                    goal_latest_runs=goal_latest_runs,
-                )
-                if task_graph_projection:
-                    item["task_graph_projection"] = task_graph_projection
-            attach_goal_channel_projection(
-                item,
-                goal=goal,
-                goal_latest_runs=goal_latest_runs,
-            )
-            history_items.append(item)
-
-    merge_global_registry_attention_findings(
-        health_items=health_items,
-        history_items=history_items,
-        findings=global_registry.get("findings") or [],
+    return _build_attention_queue_read_model(
+        contract=contract,
+        history=history,
+        global_registry=global_registry,
+        context=AttentionQueueContext(
+            active_state_todo_fields=active_state_todo_fields,
+            active_state_todo_attention_item=active_state_todo_attention_item,
+            latest_run=latest_run,
+            goal_attention=goal_attention,
+            compact_agent_lane_recommendation=compact_agent_lane_recommendation,
+            latest_agent_lane_run=latest_agent_lane_run,
+            latest_run_recommended_action_for_projection=latest_run_recommended_action_for_projection,
+            compact_autonomous_replan_ack=compact_autonomous_replan_ack,
+            latest_autonomous_replan_ack_for_projection=latest_autonomous_replan_ack_for_projection,
+            compact_control_plane_policy=compact_control_plane_policy,
+            subagent_activity_for_goal=subagent_activity_for_goal,
+            interface_budget_cadence_for_runs=interface_budget_cadence_for_runs,
+            active_state_projection_warning=active_state_projection_warning,
+            enrich_project_asset=enrich_project_asset,
+            project_asset_latest_validation=project_asset_latest_validation,
+            attach_active_state_project_asset_fields=_attach_active_state_project_asset_fields,
+            sync_connected_attention_action_from_todos=sync_connected_attention_action_from_todos,
+            quota_status=quota_status,
+            quota_with_handoff_outcome_floor=quota_with_handoff_outcome_floor,
+            normalize_monitor_quiet_attention_display=normalize_monitor_quiet_attention_display,
+            build_task_graph_projection=build_task_graph_projection,
+            attach_goal_channel_projection=attach_goal_channel_projection,
+            attach_dependency_blockers=attach_dependency_blockers,
+            autonomous_backlog_candidates=autonomous_backlog_candidates,
+            autonomous_monitor_candidates=autonomous_monitor_candidates,
+            attention_item=attention_item,
+            attach_global_registry_shadow_finding=attach_global_registry_shadow_finding,
+            next_action_projection_warning=next_action_projection_warning,
+            autonomous_replan_obligation_from_runs=autonomous_replan_obligation_from_runs,
+            source_registry_shadow_findings=SOURCE_REGISTRY_SHADOW_FINDINGS,
+            monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
+        ),
+        runtime_root=runtime_root,
+        include_task_graph=include_task_graph,
         goal_id_filter=goal_id_filter,
-    )
-
-    items = [*health_items, *history_items]
-    attach_dependency_blockers(items)
-    backlog_candidates = autonomous_backlog_candidates(items)
-    monitor_candidates = autonomous_monitor_candidates(items)
-
-    return build_attention_queue_projection(
-        items=items,
-        goal_id_filter=goal_id_filter,
-        autonomous_backlog_candidates=backlog_candidates,
-        autonomous_monitor_candidates=monitor_candidates,
     )
 
 
@@ -7088,65 +6817,6 @@ def compact_run(run: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def build_run_history(history: dict[str, Any], *, display_limit: int | None = None) -> dict[str, Any]:
-    return _build_run_history_read_model(
-        history,
-        latest_run=latest_run,
-        goal_lifecycle_fields=goal_lifecycle_fields,
-        subagent_activity_for_goal=subagent_activity_for_goal,
-        compact_run=compact_run,
-        quota_status=quota_status,
-        display_limit=display_limit,
-    )
-
-
-def event_ledger_event_class(run: dict[str, Any]) -> str:
-    return _event_ledger_event_class_read_model(
-        run,
-        compact_benchmark_run=compact_benchmark_run,
-        compact_benchmark_result=compact_benchmark_result,
-        compact_benchmark_comparison=compact_benchmark_comparison,
-        compact_benchmark_learning_ledger=compact_benchmark_learning_ledger,
-        compact_benchmark_experiment_report=compact_benchmark_experiment_report,
-        compact_active_user_assisted_pilot=compact_active_user_assisted_pilot,
-        run_has_external_evidence_watch_signal=run_has_external_evidence_watch_signal,
-        decision_classifications=EVENT_LEDGER_DECISION_CLASSIFICATIONS,
-        evidence_classifications=EVENT_LEDGER_EVIDENCE_CLASSIFICATIONS,
-        evidence_hints=EVENT_LEDGER_EVIDENCE_HINTS,
-        state_classifications=EVENT_LEDGER_STATE_CLASSIFICATIONS,
-    )
-
-
-def build_event_ledger_summary(history: dict[str, Any]) -> dict[str, Any]:
-    return _build_event_ledger_summary_read_model(
-        history,
-        parse_timestamp=parse_timestamp,
-        event_class_for_run=event_ledger_event_class,
-        compact_benchmark_run=compact_benchmark_run,
-    )
-
-
-def build_promotion_readiness_summary(
-    history: dict[str, Any],
-    *,
-    runtime_root: Path | None = None,
-    goal_id_filter: str | None = None,
-) -> dict[str, Any]:
-    return _build_promotion_readiness_summary_read_model(
-        history,
-        parse_timestamp=parse_timestamp,
-        readiness_classifications=PROMOTION_READINESS_CLASSIFICATIONS,
-        add_promotion_readiness_freshness=add_promotion_readiness_freshness,
-        latest_promotion_readiness_event=lambda root: latest_promotion_readiness_event(
-            root,
-            goal_id=goal_id_filter,
-        ),
-        freshness_hours=PROMOTION_READINESS_FRESHNESS_HOURS,
-        runtime_root=runtime_root,
-        proxy_note=PROMOTION_READINESS_PROXY_NOTE,
-    )
-
-
 def build_status_contract() -> dict[str, Any]:
     return _build_status_contract_read_model(
         schema_version=STATUS_CONTRACT_SCHEMA_VERSION,
@@ -7162,47 +6832,73 @@ def build_contract_health_projection(contract: dict[str, Any]) -> dict[str, Any]
     )
 
 
-def decision_event_kinds(run: dict[str, Any]) -> list[str]:
-    return _decision_event_kinds_read_model(
-        run,
+def build_status_runtime_summary_context() -> StatusRuntimeSummaryContext:
+    return StatusRuntimeSummaryContext(
+        latest_run=latest_run,
+        goal_lifecycle_fields=goal_lifecycle_fields,
+        subagent_activity_for_goal=subagent_activity_for_goal,
+        compact_run=compact_run,
+        quota_status=quota_status,
+        parse_timestamp=parse_timestamp,
+        compact_benchmark_run=compact_benchmark_run,
+        compact_benchmark_result=compact_benchmark_result,
+        compact_benchmark_comparison=compact_benchmark_comparison,
+        compact_benchmark_learning_ledger=compact_benchmark_learning_ledger,
+        compact_benchmark_experiment_report=compact_benchmark_experiment_report,
+        compact_active_user_assisted_pilot=compact_active_user_assisted_pilot,
+        run_has_external_evidence_watch_signal=run_has_external_evidence_watch_signal,
         decision_classifications=EVENT_LEDGER_DECISION_CLASSIFICATIONS,
-        classification_prefixes=DECISION_FRESHNESS_CLASSIFICATION_PREFIXES,
-    )
-
-
-def build_decision_freshness_summary(history: dict[str, Any]) -> dict[str, Any]:
-    return _build_decision_freshness_summary_read_model(
-        history,
-        parse_timestamp=parse_timestamp,
-        decision_event_kinds=decision_event_kinds,
-        event_class_for_run=event_ledger_event_class,
-        blank_event_class_counts=blank_event_class_counts,
-        window_days=DECISION_FRESHNESS_WINDOW_DAYS,
-        item_limit=DECISION_FRESHNESS_ITEM_LIMIT,
-        proxy_note=DECISION_FRESHNESS_PROXY_NOTE,
-    )
-
-
-def build_usage_summary(history: dict[str, Any]) -> dict[str, Any]:
-    return _build_usage_summary_read_model(
-        history,
-        parse_timestamp=parse_timestamp,
-    )
-
-
-def build_todo_index(
-    *,
-    queue: dict[str, Any],
-    history: dict[str, Any],
-    runtime_root: Path,
-    limit: int = MAX_TODO_INDEX_ITEMS,
-) -> dict[str, Any]:
-    return _build_todo_index_read_model(
-        queue=queue,
-        history=history,
-        runtime_root=runtime_root,
+        evidence_classifications=EVENT_LEDGER_EVIDENCE_CLASSIFICATIONS,
+        evidence_hints=EVENT_LEDGER_EVIDENCE_HINTS,
+        state_classifications=EVENT_LEDGER_STATE_CLASSIFICATIONS,
+        promotion_readiness_classifications=PROMOTION_READINESS_CLASSIFICATIONS,
+        add_promotion_readiness_freshness=add_promotion_readiness_freshness,
+        latest_promotion_readiness_event=latest_promotion_readiness_event,
+        promotion_readiness_freshness_hours=PROMOTION_READINESS_FRESHNESS_HOURS,
+        promotion_readiness_proxy_note=PROMOTION_READINESS_PROXY_NOTE,
         public_safe_compact_text=public_safe_compact_text,
-        limit=limit,
+        decision_freshness_classification_prefixes=DECISION_FRESHNESS_CLASSIFICATION_PREFIXES,
+        decision_freshness_window_days=DECISION_FRESHNESS_WINDOW_DAYS,
+        decision_freshness_item_limit=DECISION_FRESHNESS_ITEM_LIMIT,
+        decision_freshness_proxy_note=DECISION_FRESHNESS_PROXY_NOTE,
+    )
+
+
+def build_status_runtime_summaries(
+    *,
+    history: dict[str, Any],
+    queue: dict[str, Any],
+    runtime_root: Path,
+    goal_id_filter: str | None,
+    display_limit: int,
+    todo_index_limit: int,
+) -> dict[str, Any]:
+    return _build_status_runtime_summaries_read_model(
+        history=history,
+        queue=queue,
+        runtime_root=runtime_root,
+        goal_id_filter=goal_id_filter,
+        display_limit=display_limit,
+        todo_index_limit=todo_index_limit,
+        context=build_status_runtime_summary_context(),
+    )
+
+
+def build_status_collection_context() -> StatusCollectionContext:
+    return StatusCollectionContext(
+        load_registry=load_registry,
+        resolve_runtime_root=resolve_runtime_root,
+        collect_global_registry_health=collect_global_registry_health,
+        collect_history=collect_history,
+        check_contract=check_contract,
+        build_attention_queue=build_attention_queue,
+        build_runtime_summaries=build_status_runtime_summaries,
+        build_promotion_gate=build_promotion_gate,
+        build_status_contract=build_status_contract,
+        build_contract_health_projection=build_contract_health_projection,
+        build_agent_management_projection=_build_agent_management_projection_read_model,
+        status_control_plane_context_limit=STATUS_CONTROL_PLANE_CONTEXT_LIMIT,
+        max_todo_index_items=MAX_TODO_INDEX_ITEMS,
     )
 
 
@@ -7215,966 +6911,16 @@ def collect_status(
     include_task_graph: bool = False,
     goal_id: str | None = None,
 ) -> dict[str, Any]:
-    display_limit = max(0, limit)
-    control_plane_limit = max(display_limit, STATUS_CONTROL_PLANE_CONTEXT_LIMIT)
-    goal_filter = str(goal_id or "").strip() or None
-    registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(registry, runtime_root_override)
-    global_registry = collect_global_registry_health(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        current_registry=registry,
-    )
-    include_runtime_goals = bool(global_registry.get("current_registry_is_global"))
-    history = collect_history(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_filter,
-        limit=control_plane_limit,
-        include_runtime_goals=include_runtime_goals,
-    )
-    contract = check_contract(
+    return _collect_status_read_model(
         registry_path=registry_path,
         runtime_root_override=runtime_root_override,
         scan_roots=scan_roots,
         limit=limit,
-    )
-    queue = build_attention_queue(
-        contract=contract,
-        history=history,
-        global_registry=global_registry,
-        runtime_root=runtime_root,
         include_task_graph=include_task_graph,
-        goal_id_filter=goal_filter,
+        goal_id=goal_id,
+        context=build_status_collection_context(),
     )
-    run_history = build_run_history(history, display_limit=display_limit)
-    event_ledger_summary = build_event_ledger_summary(history)
-    promotion_readiness_summary = build_promotion_readiness_summary(
-        history,
-        runtime_root=runtime_root,
-        goal_id_filter=goal_filter,
-    )
-    promotion_gate = build_promotion_gate(
-        registry_path=registry_path,
-        runtime_root_override=str(runtime_root),
-    )
-    decision_freshness_summary = build_decision_freshness_summary(history)
-    usage_summary = build_usage_summary(history)
-    todo_index = build_todo_index(
-        queue=queue,
-        history=history,
-        runtime_root=runtime_root,
-        limit=max(MAX_TODO_INDEX_ITEMS, display_limit),
-    )
-    payload = {
-        "ok": bool(contract.get("ok")) and bool(global_registry.get("ok", True)),
-        "registry": str(registry_path),
-        "runtime_root": str(runtime_root),
-        "goal_count": history.get("goal_count"),
-        "run_count": history.get("run_count"),
-        "status_contract": build_status_contract(),
-        "goal_filter": goal_filter,
-        **build_contract_health_projection(contract),
-        "contract": {
-            "ok": contract.get("ok"),
-            "summary": contract.get("summary"),
-            "errors": contract.get("errors") or [],
-            "warnings": contract.get("warnings") or [],
-            "checks": contract.get("checks") or [],
-        },
-        "global_registry": global_registry,
-        "attention_queue": queue,
-        "run_history": run_history,
-        "event_ledger_summary": event_ledger_summary,
-        "promotion_readiness_summary": promotion_readiness_summary,
-        "promotion_gate": promotion_gate,
-        "decision_freshness_summary": decision_freshness_summary,
-        "usage_summary": usage_summary,
-        "todo_index": todo_index,
-    }
-    agent_management_projection = _build_agent_management_projection_read_model(payload)
-    if agent_management_projection.get("agents"):
-        payload["agent_management_projection"] = agent_management_projection
-    return payload
 
 
 def render_status_markdown(payload: dict[str, Any]) -> str:
-    lines = [
-        "# LoopX Status",
-        "",
-        f"- ok: `{payload.get('ok')}`",
-        f"- registry: `{payload.get('registry')}`",
-        f"- runtime_root: `{payload.get('runtime_root')}`",
-        f"- goals: `{payload.get('goal_count')}`",
-        f"- runs: `{payload.get('run_count')}`",
-    ]
-
-    status_contract = (
-        payload.get("status_contract")
-        if isinstance(payload.get("status_contract"), dict)
-        else {}
-    )
-    if status_contract:
-        lines.append(
-            "- status_contract: "
-            f"schema_version={status_contract.get('schema_version')}, "
-            f"minimum_dashboard_schema_version={status_contract.get('minimum_dashboard_schema_version')}, "
-            f"producer={status_contract.get('producer')}"
-        )
-    if payload.get("goal_filter"):
-        lines.append(f"- goal_filter: `{payload.get('goal_filter')}`")
-
-    contract = payload.get("contract") if isinstance(payload.get("contract"), dict) else {}
-    summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
-    lines.append(
-        "- contract: "
-        f"ok={contract.get('ok')}, "
-        f"errors={summary.get('errors')}, "
-        f"warnings={summary.get('warnings')}, "
-        f"checks={summary.get('checks')}"
-    )
-    contract_errors = (
-        payload.get("contract_errors") if isinstance(payload.get("contract_errors"), list) else []
-    )
-    contract_warnings = (
-        payload.get("contract_warnings") if isinstance(payload.get("contract_warnings"), list) else []
-    )
-    if contract_errors or contract_warnings:
-        lines.extend(["", "## Status Contract Signals"])
-        for item in contract_errors:
-            lines.append(f"- error: {item}")
-        if payload.get("contract_errors_truncated"):
-            lines.append(
-                f"- contract_errors_truncated: total={payload.get('contract_errors_total_count')}"
-            )
-        for item in contract_warnings:
-            lines.append(f"- warning: {item}")
-        if payload.get("contract_warnings_truncated"):
-            lines.append(
-                f"- contract_warnings_truncated: total={payload.get('contract_warnings_total_count')}"
-            )
-
-    global_registry = payload.get("global_registry") if isinstance(payload.get("global_registry"), dict) else {}
-    global_summary = (
-        global_registry.get("summary")
-        if isinstance(global_registry.get("summary"), dict)
-        else {}
-    )
-    lines.extend(
-        [
-            "- global_registry: "
-            f"available={global_registry.get('available')}, "
-            f"ok={global_registry.get('ok')}, "
-            f"findings={global_summary.get('findings')}, "
-            f"high={global_summary.get('high')}, "
-            f"action={global_summary.get('action')}, "
-            f"info={global_summary.get('info')}",
-        ]
-    )
-
-    event_ledger = (
-        payload.get("event_ledger_summary")
-        if isinstance(payload.get("event_ledger_summary"), dict)
-        else {}
-    )
-    _append_event_ledger_summary_markdown(
-        lines,
-        event_ledger,
-        event_classes=EVENT_LEDGER_CLASSES,
-    )
-
-    promotion_readiness = (
-        payload.get("promotion_readiness_summary")
-        if isinstance(payload.get("promotion_readiness_summary"), dict)
-        else {}
-    )
-    _append_promotion_readiness_summary_markdown(lines, promotion_readiness)
-
-    promotion_gate = (
-        payload.get("promotion_gate")
-        if isinstance(payload.get("promotion_gate"), dict)
-        else {}
-    )
-    _append_promotion_gate_markdown(lines, promotion_gate)
-
-    decision_freshness = (
-        payload.get("decision_freshness_summary")
-        if isinstance(payload.get("decision_freshness_summary"), dict)
-        else {}
-    )
-    _append_decision_freshness_summary_markdown(lines, decision_freshness)
-
-    usage = payload.get("usage_summary") if isinstance(payload.get("usage_summary"), dict) else {}
-    _append_usage_summary_markdown(lines, usage)
-
-    queue = payload.get("attention_queue") if isinstance(payload.get("attention_queue"), dict) else {}
-    _append_attention_queue_summary_markdown(lines, queue)
-    items = queue.get("items") if isinstance(queue.get("items"), list) else []
-    goals = _goals_by_id(payload)
-    if not items:
-        lines.append("- none")
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        authority_summary = _authority_registry_markdown_summary(goals.get(str(item.get("goal_id") or "")))
-        _append_attention_queue_item_header_markdown(
-            lines,
-            item,
-            authority_summary=authority_summary,
-        )
-        project_asset = item.get("project_asset") if isinstance(item.get("project_asset"), dict) else {}
-        agent_lane_next_action = (
-            project_asset.get("agent_lane_next_action")
-            if isinstance(project_asset.get("agent_lane_next_action"), dict)
-            else item.get("agent_lane_next_action")
-            if isinstance(item.get("agent_lane_next_action"), dict)
-            else {}
-        )
-        agent_lane_frontier_hint = (
-            project_asset.get("agent_lane_frontier_hint")
-            if isinstance(project_asset.get("agent_lane_frontier_hint"), dict)
-            else item.get("agent_lane_frontier_hint")
-            if isinstance(item.get("agent_lane_frontier_hint"), dict)
-            else {}
-        )
-        goal_todo_scope_suffix = " scope=goal_all_agents" if agent_lane_next_action else ""
-        lines.append(
-            "  - project_asset_source: "
-            + (
-                "project_asset"
-                if project_asset
-                else "legacy/raw fallback; owner/gate/stop are not project_asset-backed"
-            )
-        )
-        if project_asset:
-            lines.append(
-                "  - project_asset: "
-                f"owner={_markdown_scalar(project_asset.get('owner') or '')} "
-                f"gate={_markdown_scalar(project_asset.get('gate') or '')} "
-                f"stop={_markdown_scalar(project_asset.get('stop_condition') or '')}"
-            )
-            asset_next_action = _markdown_scalar(project_asset.get("next_action") or "")
-            if asset_next_action:
-                lines.append(f"    - asset_next_action: {asset_next_action}")
-            asset_active_next_action = _markdown_scalar(
-                project_asset.get("active_state_next_action") or ""
-            )
-            if asset_active_next_action:
-                lines.append(f"    - asset_active_state_next_action: {asset_active_next_action}")
-            asset_latest_run_action = _markdown_scalar(
-                project_asset.get("latest_run_recommended_action") or ""
-            )
-            if asset_latest_run_action:
-                lines.append(f"    - asset_latest_run_recommended_action: {asset_latest_run_action}")
-            agent_lane_recommendation = (
-                project_asset.get("agent_lane_recommendation")
-                if isinstance(project_asset.get("agent_lane_recommendation"), dict)
-                else {}
-            )
-            if agent_lane_recommendation:
-                lane = _markdown_scalar(agent_lane_recommendation.get("agent_lane") or "")
-                agent = _markdown_scalar(agent_lane_recommendation.get("agent_id") or "")
-                recommendation = _markdown_scalar(
-                    agent_lane_recommendation.get("recommended_action") or ""
-                )
-                lines.append(
-                    "    - agent_lane_recommendation: "
-                    f"agent={agent} lane={lane} action={recommendation}"
-                )
-            agent_member = (
-                project_asset.get("agent_member")
-                if isinstance(project_asset.get("agent_member"), dict)
-                else item.get("agent_member")
-                if isinstance(item.get("agent_member"), dict)
-                else {}
-            )
-            if agent_member:
-                current_claims = ",".join(
-                    _markdown_scalar(claim)
-                    for claim in (agent_member.get("current_claims") or [])
-                    if str(claim or "").strip()
-                )
-                lines.append(
-                    "    - agent_member: "
-                    f"agent={_markdown_scalar(agent_member.get('agent_id') or '')} "
-                    f"role={_markdown_scalar(agent_member.get('role') or '')} "
-                    f"scope={_markdown_scalar(agent_member.get('scope_summary') or '')} "
-                    f"worktree_policy={_markdown_scalar(agent_member.get('worktree_policy') or '')} "
-                    f"claims={_markdown_scalar(current_claims)} "
-                    f"handoff_agent={_markdown_scalar(agent_member.get('handoff_agent') or '')} "
-                    f"source={_markdown_scalar(agent_member.get('profile_source') or '')} "
-                    "authority=advisory_projection"
-                )
-            if agent_lane_next_action:
-                agent = _markdown_scalar(agent_lane_next_action.get("agent_id") or "")
-                todo_id = _markdown_scalar(agent_lane_next_action.get("todo_id") or "")
-                selected_by = _markdown_scalar(agent_lane_next_action.get("selected_by") or "")
-                confidence = _markdown_scalar(agent_lane_next_action.get("confidence") or "")
-                action = _markdown_scalar(agent_lane_next_action.get("text") or "")
-                lines.append(
-                    "    - current_agent_todo: "
-                    f"agent={agent} todo_id={todo_id} selected_by={selected_by} "
-                    f"confidence={confidence} source=agent_lane_next_action action={action}"
-                )
-            if agent_lane_frontier_hint:
-                lines.append(
-                    "    - agent_lane_frontier_hint: "
-                    f"agent={_markdown_scalar(agent_lane_frontier_hint.get('agent_id') or '')} "
-                    f"decision={_markdown_scalar(agent_lane_frontier_hint.get('decision') or '')} "
-                    f"source={_markdown_scalar(agent_lane_frontier_hint.get('source') or '')} "
-                    f"reason_code={_markdown_scalar(agent_lane_frontier_hint.get('reason_code') or '')} "
-                    f"target_todo_id={_markdown_scalar(agent_lane_frontier_hint.get('target_todo_id') or '')}"
-                )
-            goal_frontier = (
-                project_asset.get("goal_frontier_projection")
-                if isinstance(project_asset.get("goal_frontier_projection"), dict)
-                else item.get("goal_frontier_projection")
-                if isinstance(item.get("goal_frontier_projection"), dict)
-                else {}
-            )
-            if goal_frontier:
-                remaining = (
-                    goal_frontier.get("remaining_advancement_frontier")
-                    if isinstance(goal_frontier.get("remaining_advancement_frontier"), dict)
-                    else {}
-                )
-                deferred_successors = (
-                    goal_frontier.get("deferred_successors")
-                    if isinstance(goal_frontier.get("deferred_successors"), dict)
-                    else {}
-                )
-                acceptance_gaps = (
-                    goal_frontier.get("acceptance_gaps")
-                    if isinstance(goal_frontier.get("acceptance_gaps"), list)
-                    else []
-                )
-                lines.append(
-                    "    - goal_frontier_projection: "
-                    f"replan_required={goal_frontier.get('replan_required')} "
-                    f"current_agent_advancement={remaining.get('current_agent_claimed_advancement_count')} "
-                    f"unclaimed_advancement={remaining.get('unclaimed_advancement_count')} "
-                    f"other_agent_advancement={remaining.get('other_agent_claimed_advancement_count')} "
-                    f"deferred_ready={deferred_successors.get('ready_count')} "
-                    f"acceptance_gaps={len(acceptance_gaps)}"
-                )
-            dreaming_lane_badge = (
-                project_asset.get("dreaming_lane_badge")
-                if isinstance(project_asset.get("dreaming_lane_badge"), dict)
-                else {}
-            )
-            if dreaming_lane_badge:
-                lines.append(
-                    "    - dreaming_lane_badge: "
-                    f"lane={_markdown_scalar(dreaming_lane_badge.get('lane') or '')} "
-                    f"status={_markdown_scalar(dreaming_lane_badge.get('status') or '')} "
-                    f"proposal_id={_markdown_scalar(dreaming_lane_badge.get('proposal_id') or '')} "
-                    f"advisory={dreaming_lane_badge.get('advisory')} "
-                    f"interrupts_delivery={dreaming_lane_badge.get('interrupts_delivery')} "
-                    f"execution_allowed={dreaming_lane_badge.get('execution_allowed')}"
-                )
-            asset_execution_profile = (
-                project_asset.get("execution_profile")
-                if isinstance(project_asset.get("execution_profile"), dict)
-                else None
-            )
-            if asset_execution_profile:
-                lines.append(
-                    "    - execution_profile: "
-                    f"{_markdown_scalar(execution_profile_summary(asset_execution_profile))}"
-                )
-            long_task_cadence_hint = (
-                project_asset.get("long_task_cadence_hint")
-                if isinstance(project_asset.get("long_task_cadence_hint"), dict)
-                else None
-            )
-            if long_task_cadence_hint:
-                lines.append(
-                    "    - long_task_cadence_hint: "
-                    f"{_markdown_scalar(long_task_cadence_hint_summary(long_task_cadence_hint))}"
-                )
-            asset_orchestration = (
-                project_asset.get("orchestration")
-                if isinstance(project_asset.get("orchestration"), dict)
-                else None
-            )
-            if asset_orchestration:
-                lines.append(
-                    "    - orchestration: "
-                    f"{_markdown_scalar(orchestration_policy_summary(asset_orchestration))}"
-                )
-            subagent_activity = (
-                project_asset.get("subagent_activity")
-                if isinstance(project_asset.get("subagent_activity"), dict)
-                else {}
-            )
-            if subagent_activity:
-                lines.append(
-                    "    - subagent_activity: "
-                    f"children={subagent_activity.get('child_count')} "
-                    f"visible={subagent_activity.get('visible_child_count')} "
-                    f"active={subagent_activity.get('active_count')} "
-                    f"completed={subagent_activity.get('completed_count')} "
-                    f"quota_slots={subagent_activity.get('quota_spend_slots')}"
-                )
-                for child in (subagent_activity.get("items") or [])[:3]:
-                    if not isinstance(child, dict):
-                        continue
-                    role = _markdown_scalar(child.get("agent_role") or "subagent")
-                    state = _markdown_scalar(child.get("state") or "unknown")
-                    run_id = _markdown_scalar(child.get("run_id") or "")
-                    parent_run_id = _markdown_scalar(child.get("parent_run_id") or "")
-                    lines.append(
-                        f"      - child_run: role={role} state={state} "
-                        f"run_id={run_id} parent_run_id={parent_run_id}"
-                    )
-            asset_user_todos = (
-                project_asset.get("user_todos")
-                if isinstance(project_asset.get("user_todos"), dict)
-                else {}
-            )
-            asset_agent_todos = (
-                project_asset.get("agent_todos")
-                if isinstance(project_asset.get("agent_todos"), dict)
-                else {}
-            )
-            if asset_user_todos or asset_agent_todos:
-                todo_parts = []
-                if asset_user_todos:
-                    todo_parts.append(f"user_open={asset_user_todos.get('open')}")
-                    if asset_user_todos.get("claimed_open_count"):
-                        todo_parts.append(f"user_claimed={asset_user_todos.get('claimed_open_count')}")
-                if asset_agent_todos:
-                    todo_parts.append(f"agent_open={asset_agent_todos.get('open')}")
-                    if asset_agent_todos.get("claimed_open_count"):
-                        todo_parts.append(f"agent_claimed={asset_agent_todos.get('claimed_open_count')}")
-                lines.append(f"    - asset_todos: {' '.join(todo_parts)}")
-                if asset_user_todos.get("next"):
-                    claimed = asset_user_todos.get("next_claimed_by")
-                    claim_suffix = f" claimed_by={_markdown_scalar(claimed)}" if claimed else ""
-                    lines.append(f"      - asset_user_todo: {_markdown_scalar(asset_user_todos.get('next') or '')}{claim_suffix}")
-                for todo in (asset_user_todos.get("items") or [])[1:3]:
-                    if isinstance(todo, dict) and todo.get("text"):
-                        index = todo.get("index")
-                        suffix = f"[{index}]" if index is not None else ""
-                        claimed = todo.get("claimed_by")
-                        claim_suffix = f" claimed_by={_markdown_scalar(claimed)}" if claimed else ""
-                        lines.append(f"      - asset_user_todo{suffix}: {_markdown_scalar(todo.get('text') or '')}{claim_suffix}")
-                if asset_agent_todos.get("next"):
-                    claimed = asset_agent_todos.get("next_claimed_by")
-                    claim_suffix = f" claimed_by={_markdown_scalar(claimed)}" if claimed else ""
-                    lines.append(
-                        f"      - asset_agent_todo: "
-                        f"{_markdown_scalar(asset_agent_todos.get('next') or '')}"
-                        f"{claim_suffix}{goal_todo_scope_suffix}"
-                    )
-                for todo in (asset_agent_todos.get("items") or [])[1:3]:
-                    if isinstance(todo, dict) and todo.get("text"):
-                        index = todo.get("index")
-                        suffix = f"[{index}]" if index is not None else ""
-                        claimed = todo.get("claimed_by")
-                        claim_suffix = f" claimed_by={_markdown_scalar(claimed)}" if claimed else ""
-                        lines.append(
-                            f"      - asset_agent_todo{suffix}: "
-                            f"{_markdown_scalar(todo.get('text') or '')}"
-                            f"{claim_suffix}{goal_todo_scope_suffix}"
-                        )
-            asset_quota = (
-                project_asset.get("quota")
-                if isinstance(project_asset.get("quota"), dict)
-                else {}
-            )
-            if asset_quota:
-                lines.append(
-                    "    - asset_quota: "
-                    f"compute={asset_quota.get('compute')} "
-                    f"state={asset_quota.get('state')} "
-                    f"slots={asset_quota.get('spent_slots')}/{asset_quota.get('allowed_slots')}"
-                )
-            projection_warning = (
-                project_asset.get("stale_latest_run_warning")
-                if isinstance(project_asset.get("stale_latest_run_warning"), dict)
-                else {}
-            )
-            if projection_warning:
-                lines.append(
-                    "    - stale_latest_run_warning: "
-                    f"requires_refresh_state={projection_warning.get('requires_refresh_state')} "
-                    f"active_state_updated_at={_markdown_scalar(projection_warning.get('active_state_updated_at') or '')} "
-                    f"latest_run_generated_at={_markdown_scalar(projection_warning.get('latest_run_generated_at') or '')} "
-                    f"reason={_markdown_scalar(projection_warning.get('reason') or '')}"
-                )
-            next_action_warning = (
-                project_asset.get("next_action_projection_warning")
-                if isinstance(project_asset.get("next_action_projection_warning"), dict)
-                else item.get("next_action_projection_warning")
-                if isinstance(item.get("next_action_projection_warning"), dict)
-                else {}
-            )
-            if next_action_warning:
-                lines.append(
-                    "    - next_action_projection_warning: "
-                    f"requires_state_writeback={next_action_warning.get('requires_state_writeback')} "
-                    f"reason={_markdown_scalar(next_action_warning.get('reason') or '')}"
-                )
-            backlog_warning = (
-                project_asset.get("backlog_hygiene_warning")
-                if isinstance(project_asset.get("backlog_hygiene_warning"), dict)
-                else {}
-            )
-            if backlog_warning:
-                lines.append(
-                    "    - backlog_hygiene_warning: "
-                    f"requires_agent_todo={backlog_warning.get('requires_agent_todo')} "
-                    f"evidence_count={backlog_warning.get('evidence_count')} "
-                    f"source_sections={_markdown_scalar(','.join(backlog_warning.get('source_sections') or []))}"
-                )
-            projection_gap = (
-                project_asset.get("state_projection_gap")
-                if isinstance(project_asset.get("state_projection_gap"), dict)
-                else {}
-            )
-            if projection_gap:
-                lines.append(
-                    "    - state_projection_gap: "
-                    f"requires_todo_expansion={projection_gap.get('requires_todo_expansion')} "
-                    f"user_open={projection_gap.get('user_open_count')} "
-                    f"agent_open={projection_gap.get('agent_open_count')} "
-                    f"target_roles={_markdown_scalar(','.join(projection_gap.get('target_roles') or []))}"
-                )
-            todo_projection_gap = (
-                project_asset.get("todo_projection_gap")
-                if isinstance(project_asset.get("todo_projection_gap"), dict)
-                else {}
-            )
-            if todo_projection_gap:
-                lines.append(
-                    "    - todo_projection_gap: "
-                    f"missing_roles={_markdown_scalar(','.join(todo_projection_gap.get('missing_roles') or []))} "
-                    f"source={_markdown_scalar(todo_projection_gap.get('source') or '')}"
-                )
-            archive_warning = (
-                project_asset.get("completed_todo_archive_warning")
-                if isinstance(project_asset.get("completed_todo_archive_warning"), dict)
-                else {}
-            )
-            if archive_warning:
-                lines.append(
-                    "    - completed_todo_archive_warning: "
-                    f"requires_archive={archive_warning.get('requires_archive')} "
-                    f"active_done={archive_warning.get('active_done_count')} "
-                    f"max_active_done={archive_warning.get('max_active_done_count')} "
-                    f"archive_section={_markdown_scalar(archive_warning.get('archive_section') or '')}"
-                )
-            replan_obligation = (
-                project_asset.get("autonomous_replan_obligation")
-                if isinstance(project_asset.get("autonomous_replan_obligation"), dict)
-                else {}
-            )
-            if replan_obligation:
-                trigger_kinds = [
-                    str(trigger.get("kind") or "")
-                    for trigger in replan_obligation.get("triggers") or []
-                    if isinstance(trigger, dict) and trigger.get("kind")
-                ]
-                lines.append(
-                    "    - autonomous_replan_obligation: "
-                    f"required={replan_obligation.get('required')} "
-                    f"trigger_count={replan_obligation.get('trigger_count')} "
-                    f"triggers={_markdown_scalar(','.join(trigger_kinds))}"
-                )
-            interface_budget_cadence = (
-                project_asset.get("interface_budget_cadence")
-                if isinstance(project_asset.get("interface_budget_cadence"), dict)
-                else {}
-            )
-            if interface_budget_cadence:
-                lines.append(
-                    "    - interface_budget_cadence: "
-                    f"overdue={interface_budget_cadence.get('overdue')} "
-                    f"within_budget={interface_budget_cadence.get('within_budget')} "
-                    f"checked_at={_markdown_scalar(interface_budget_cadence.get('checked_at') or '')} "
-                    f"next_check_due_at={_markdown_scalar(interface_budget_cadence.get('next_check_due_at') or '')} "
-                    f"tightest={_markdown_scalar(interface_budget_cadence.get('tightest_surface') or '')}/"
-                    f"{_markdown_scalar(interface_budget_cadence.get('tightest_metric') or '')} "
-                    f"headroom={interface_budget_cadence.get('headroom_remaining')} "
-                    f"recommendation={_markdown_scalar(interface_budget_cadence.get('recommendation') or '')}"
-                )
-            latest_validation = (
-                project_asset.get("latest_validation")
-                if isinstance(project_asset.get("latest_validation"), dict)
-                else {}
-            )
-            if latest_validation:
-                lines.append(
-                    "    - latest_validation: "
-                    f"classification={_markdown_scalar(latest_validation.get('classification') or '')} "
-                    f"at={_markdown_scalar(latest_validation.get('generated_at') or '')}"
-                )
-            session_projection = (
-                project_asset.get("session_runtime_projection")
-                if isinstance(project_asset.get("session_runtime_projection"), dict)
-                else {}
-            )
-            if session_projection:
-                first_screen = (
-                    session_projection.get("first_screen")
-                    if isinstance(session_projection.get("first_screen"), dict)
-                    else {}
-                )
-                boundary = (
-                    session_projection.get("boundary")
-                    if isinstance(session_projection.get("boundary"), dict)
-                    else {}
-                )
-                source = (
-                    session_projection.get("source")
-                    if isinstance(session_projection.get("source"), dict)
-                    else {}
-                )
-                lines.append(
-                    "    - session_runtime_projection: "
-                    f"waiting_on={_markdown_scalar(first_screen.get('waiting_on') or '')} "
-                    f"agent_can_continue={first_screen.get('agent_can_continue')} "
-                    f"user_action_required={first_screen.get('user_action_required')} "
-                    f"gate={_markdown_scalar(first_screen.get('gate_state') or '')} "
-                    f"raw_material_detected={boundary.get('raw_material_detected')} "
-                    f"runtime_writeback_allowed={boundary.get('runtime_writeback_allowed')} "
-                    f"host={_markdown_scalar(source.get('host_kind') or '')}"
-                )
-                if first_screen.get("first_user_todo"):
-                    lines.append(
-                        "      - session_runtime_user_todo: "
-                        f"{_markdown_scalar(first_screen.get('first_user_todo') or '')}"
-                    )
-                if first_screen.get("first_agent_todo"):
-                    lines.append(
-                        "      - session_runtime_agent_todo: "
-                        f"{_markdown_scalar(first_screen.get('first_agent_todo') or '')}"
-                    )
-            handoff_readiness = (
-                item.get("handoff_readiness")
-                if isinstance(item.get("handoff_readiness"), dict)
-                else {}
-            )
-            if handoff_readiness:
-                lines.append(
-                    "    - handoff_readiness: "
-                    f"ready={handoff_readiness.get('ready')} "
-                    f"codex_ready={handoff_readiness.get('codex_ready')} "
-                    f"source={_markdown_scalar(handoff_readiness.get('source') or '')} "
-                    f"quota_state={_markdown_scalar(handoff_readiness.get('quota_state') or '')}"
-                )
-                interface_budget = (
-                    handoff_readiness.get("handoff_interface_budget")
-                    if isinstance(handoff_readiness.get("handoff_interface_budget"), dict)
-                    else {}
-                )
-                if interface_budget:
-                    lines.append(
-                        "      - handoff_interface_budget: "
-                        f"mode={_markdown_scalar(interface_budget.get('mode') or '')} "
-                        f"max_lines={interface_budget.get('max_lines')} "
-                        f"max_chars={interface_budget.get('max_chars')}"
-                    )
-                checks = (
-                    handoff_readiness.get("checks")
-                    if isinstance(handoff_readiness.get("checks"), dict)
-                    else {}
-                )
-                passed = [key for key, value in checks.items() if value]
-                failed = [key for key, value in checks.items() if not value]
-                if checks:
-                    lines.append(
-                        "      - handoff_checks: "
-                        f"pass={','.join(passed) if passed else '-'} "
-                        f"fail={','.join(failed) if failed else '-'}"
-                    )
-                lines.append(
-                    "      - handoff_state: "
-                    f"status={_markdown_scalar(handoff_readiness.get('handoff_status') or '')} "
-                    f"post_handoff_run_seen={handoff_readiness.get('post_handoff_run_seen')} "
-                    f"ready_at={_markdown_scalar(handoff_readiness.get('handoff_ready_at') or '')}"
-                )
-                latest_handoff_run = (
-                    handoff_readiness.get("post_handoff_latest_run")
-                    if isinstance(handoff_readiness.get("post_handoff_latest_run"), dict)
-                    else {}
-                )
-                if latest_handoff_run:
-                    outcome_suffix = ""
-                    if latest_handoff_run.get("delivery_outcome"):
-                        outcome_suffix = (
-                            " "
-                            f"outcome={_markdown_scalar(latest_handoff_run.get('delivery_outcome') or '')}"
-                        )
-                    turn_kind_suffix = ""
-                    if latest_handoff_run.get("delivery_turn_kind"):
-                        turn_kind_suffix = (
-                            " "
-                            f"turn_kind={_markdown_scalar(latest_handoff_run.get('delivery_turn_kind') or '')}"
-                        )
-                    lines.append(
-                        "      - post_handoff_run: "
-                        f"classification={_markdown_scalar(latest_handoff_run.get('classification') or '')} "
-                        f"at={_markdown_scalar(latest_handoff_run.get('generated_at') or '')} "
-                        f"scale={_markdown_scalar(latest_handoff_run.get('delivery_batch_scale') or '')}"
-                        f"{outcome_suffix}"
-                        f"{turn_kind_suffix}"
-                    )
-                recent_handoff_runs = (
-                    handoff_readiness.get("post_handoff_recent_runs")
-                    if isinstance(handoff_readiness.get("post_handoff_recent_runs"), list)
-                    else []
-                )
-                recent_scales = [
-                    _markdown_scalar(str(run.get("delivery_batch_scale") or ""))
-                    for run in recent_handoff_runs
-                    if isinstance(run, dict)
-                ]
-                if recent_scales:
-                    recent_outcomes = [
-                        _markdown_scalar(str(run.get("delivery_outcome") or ""))
-                        for run in recent_handoff_runs
-                        if isinstance(run, dict) and run.get("delivery_outcome")
-                    ]
-                    outcome_text = f" outcome={','.join(recent_outcomes)}" if recent_outcomes else ""
-                    recent_turn_kinds = [
-                        _markdown_scalar(str(run.get("delivery_turn_kind") or ""))
-                        for run in recent_handoff_runs
-                        if isinstance(run, dict) and run.get("delivery_turn_kind")
-                    ]
-                    turn_kind_text = (
-                        f" turn_kind={','.join(recent_turn_kinds)}" if recent_turn_kinds else ""
-                    )
-                    gap_text = (
-                        f" outcome_gap_streak={handoff_readiness.get('post_handoff_outcome_gap_streak')}"
-                        if "post_handoff_outcome_gap_streak" in handoff_readiness
-                        else ""
-                    )
-                    lines.append(
-                        "      - post_handoff_recent_scales: "
-                        f"{','.join(recent_scales)} "
-                        f"small_streak={handoff_readiness.get('post_handoff_small_scale_streak', 0)}"
-                        f"{outcome_text}"
-                        f"{turn_kind_text}"
-                        f"{gap_text}"
-                    )
-                if handoff_readiness.get("next_probe"):
-                    handoff_probe = _markdown_scalar(handoff_readiness.get("next_probe") or "")
-                    lines.append(f"      - handoff_probe: `{handoff_probe}`")
-        user_todos = item.get("user_todos") if isinstance(item.get("user_todos"), dict) else {}
-        if user_todos:
-            todo_parts = [
-                f"open={user_todos.get('open_count')}",
-                f"done={user_todos.get('done_count')}",
-                f"total={user_todos.get('total_count')}",
-            ]
-            if user_todos.get("claimed_open_count"):
-                todo_parts.insert(1, f"claimed={user_todos.get('claimed_open_count')}")
-                todo_parts.insert(2, f"unclaimed={user_todos.get('unclaimed_open_count', 0)}")
-            lines.append(f"  - user_todos: {' '.join(todo_parts)}")
-            for todo in user_todos.get("items") or []:
-                if not isinstance(todo, dict) or todo.get("done"):
-                    continue
-                claimed = todo.get("claimed_by")
-                claim_suffix = f" claimed_by={_markdown_scalar(claimed)}" if claimed else ""
-                lines.append(f"    - next_user_todo: {_markdown_scalar(todo.get('text') or '')}{claim_suffix}")
-                for material in todo.get("review_materials") or []:
-                    if not isinstance(material, dict):
-                        continue
-                    lines.append(
-                        "      - review_material: "
-                        f"{_markdown_scalar(material.get('label') or material.get('path') or '')} "
-                        f"exists={material.get('exists')}"
-                    )
-                break
-        agent_todos = item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else {}
-        if agent_todos:
-            todo_parts = [
-                f"open={agent_todos.get('open_count')}",
-                f"done={agent_todos.get('done_count')}",
-                f"total={agent_todos.get('total_count')}",
-            ]
-            if agent_todos.get("claimed_open_count"):
-                todo_parts.insert(1, f"claimed={agent_todos.get('claimed_open_count')}")
-                todo_parts.insert(2, f"unclaimed={agent_todos.get('unclaimed_open_count', 0)}")
-            lines.append(f"  - agent_todos: {' '.join(todo_parts)}")
-            for todo in agent_todos.get("items") or []:
-                if not isinstance(todo, dict) or todo.get("done"):
-                    continue
-                claimed = todo.get("claimed_by")
-                claim_suffix = f" claimed_by={_markdown_scalar(claimed)}" if claimed else ""
-                lines.append(
-                    f"    - next_agent_todo: "
-                    f"{_markdown_scalar(todo.get('text') or '')}"
-                    f"{claim_suffix}{goal_todo_scope_suffix}"
-                )
-                break
-        dependency_blockers = (
-            item.get("dependency_blockers")
-            if isinstance(item.get("dependency_blockers"), dict)
-            else {}
-        )
-        if dependency_blockers:
-            lines.append(
-                "  - dependency_blockers: "
-                f"open={dependency_blockers.get('open_count')} "
-                f"source={_markdown_scalar(dependency_blockers.get('source') or '')}"
-            )
-            for blocker in dependency_blockers.get("items") or []:
-                if not isinstance(blocker, dict):
-                    continue
-                lines.append(
-                    "    - dependency_user_todo: "
-                    f"goal={_markdown_scalar(blocker.get('goal_id') or '')} "
-                    f"waiting_on={_markdown_scalar(blocker.get('waiting_on') or '')} "
-                    f"text={_markdown_scalar(blocker.get('text') or '')}"
-                )
-        quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
-        if quota:
-            lines.append(
-                "  - quota: "
-                f"compute={quota.get('compute')} "
-                f"state={quota.get('state')} "
-                f"slots={quota.get('spent_slots')}/{quota.get('allowed_slots')} "
-                f"reason={quota.get('reason')}"
-            )
-        control_plane = item.get("control_plane") if isinstance(item.get("control_plane"), dict) else None
-        if control_plane:
-            lines.append(f"  - control_plane: {control_plane_policy_summary(control_plane)}")
-        operator_question = item.get("operator_question")
-        agent_command = item.get("agent_command")
-        if operator_question:
-            lines.append(f"  - operator_question: {operator_question}")
-            if agent_command:
-                goal_id = item.get("goal_id")
-                lines.append(
-                    "  - operator_gate_dry_run: "
-                    f"`loopx operator-gate --goal-id {goal_id} --decision approve "
-                    '--reason-summary "<public-safe reason>" --dry-run`'
-                )
-        if agent_command:
-            lines.append(f"  - agent_command: `{agent_command}`")
-        gates = item.get("missing_gates") if isinstance(item.get("missing_gates"), list) else []
-        gate_text = ", ".join(str(gate) for gate in gates if gate)
-        controller_stage = item.get("controller_stage")
-        next_condition = item.get("next_handoff_condition")
-        if controller_stage or gate_text:
-            lines.append(
-                "  - gates: "
-                f"stage={controller_stage or 'none'} "
-                f"missing={gate_text or 'none'}"
-            )
-        if next_condition:
-            lines.append(f"  - next_handoff_condition: {next_condition}")
-
-    run_history = payload.get("run_history") if isinstance(payload.get("run_history"), dict) else {}
-    run_goals = run_history.get("goals") if isinstance(run_history.get("goals"), list) else []
-    lines.extend(
-        [
-            "",
-            "## Run History",
-            "- summary: "
-            f"goals={run_history.get('goal_count')}, "
-            f"runs={run_history.get('run_count')}",
-        ]
-    )
-    if not run_goals:
-        lines.append("- none")
-    for goal in run_goals:
-        if not isinstance(goal, dict):
-            continue
-        lines.append(
-            "- "
-            f"`{goal.get('id')}`: "
-            f"status={goal.get('status')} "
-            f"phase={goal.get('lifecycle_phase')} "
-            f"adapter={goal.get('adapter_kind')}:{goal.get('adapter_status')} "
-            f"records={goal.get('raw_index_records')} "
-            f"unique_runs={goal.get('unique_runs')}"
-        )
-        quota = goal.get("quota") if isinstance(goal.get("quota"), dict) else {}
-        if quota:
-            lines.append(
-                "  - quota: "
-                f"compute={quota.get('compute')} "
-                f"state={quota.get('state')} "
-                f"slots={quota.get('spent_slots')}/{quota.get('allowed_slots')}"
-            )
-        latest_runs = goal.get("latest_runs") if isinstance(goal.get("latest_runs"), list) else []
-        if latest_runs:
-            latest = latest_runs[0]
-            if isinstance(latest, dict):
-                reward = latest.get("human_reward") if isinstance(latest.get("human_reward"), dict) else {}
-                reward_text = (
-                    f" reward={reward.get('decision')}:{reward.get('reward')}"
-                    if reward
-                    else ""
-                )
-                operator_gate = (
-                    latest.get("operator_gate")
-                    if isinstance(latest.get("operator_gate"), dict)
-                    else {}
-                )
-                operator_gate_text = (
-                    f" operator_gate={operator_gate.get('gate')}:{operator_gate.get('decision')}"
-                    if operator_gate
-                    else ""
-                )
-                readiness = (
-                    latest.get("controller_readiness")
-                    if isinstance(latest.get("controller_readiness"), dict)
-                    else {}
-                )
-                readiness_text = (
-                    f" readiness={readiness.get('classification')}"
-                    if readiness
-                    else ""
-                )
-                lines.append(
-                    "  - latest: "
-                    f"{latest.get('generated_at')} "
-                    f"classification={latest.get('classification')} "
-                    f"phase={latest.get('lifecycle_phase')} "
-                    f"artifacts={latest.get('json_exists')}/{latest.get('markdown_exists')}"
-                    f"{reward_text}"
-                    f"{operator_gate_text}"
-                    f"{readiness_text}"
-                )
-                if reward:
-                    _append_human_reward_markdown(lines, goal.get("id"), reward)
-                resume_contract = (
-                    latest.get("operator_gate_resume_contract")
-                    if isinstance(latest.get("operator_gate_resume_contract"), dict)
-                    else {}
-                )
-                if resume_contract:
-                    _append_operator_gate_resume_contract_markdown(lines, resume_contract)
-
-    for title, key in (("Errors", "errors"), ("Warnings", "warnings"), ("Checks", "checks")):
-        entries = contract.get(key) if isinstance(contract.get(key), list) else []
-        if entries:
-            lines.extend(["", f"## {title}"])
-            lines.extend(f"- {entry}" for entry in entries)
-
-    findings = (
-        global_registry.get("findings")
-        if isinstance(global_registry.get("findings"), list)
-        else []
-    )
-    if findings:
-        lines.extend(["", "## Global Registry Findings"])
-        for finding in findings:
-            if not isinstance(finding, dict):
-                continue
-            lines.append(
-                "- "
-                f"{finding.get('severity')} "
-                f"{finding.get('kind')} "
-                f"goal={finding.get('goal_id') or finding.get('goal_ids') or 'global'}: "
-                f"{finding.get('message')}"
-            )
-            if finding.get("recommended_action"):
-                lines.append(f"  - action: {finding.get('recommended_action')}")
-
-    return "\n".join(lines)
+    return _render_status_markdown(payload, event_classes=EVENT_LEDGER_CLASSES)

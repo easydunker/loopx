@@ -49,17 +49,6 @@ SUPPORTED_WORKER_ACTIONS = {
     "write_evaluation_summary",
     "review_promotion_readiness",
 }
-GENERIC_VERIFIER_HANDOFF_KEYWORDS = (
-    "verify",
-    "verifier",
-    "validate",
-    "validation",
-    "evidence",
-    "holdout",
-    "promotion",
-    "promote",
-)
-
 AppendEvidence = Callable[[str], dict[str, object]]
 AUTO_RESEARCH_STATE_SUMMARY_MODE = "rollout_evidence_summary"
 AUTO_RESEARCH_MANUAL_RESEARCH_REQUIRED_MODE = "manual_research_required"
@@ -295,88 +284,18 @@ def _maybe_add_role_successor_todos(
     )
 
 
-def _generic_handoff_is_satisfied(
-    *,
-    selected: dict[str, object],
-    evidence_graph: dict[str, object],
-    decisions: dict[str, list[dict[str, object]]],
-) -> bool:
-    if not decisions.get("validated_promotion_candidates"):
-        return False
-    if not evidence_graph.get("holdout_improved"):
-        return False
-    selected_text = " ".join(
-        str(selected.get(key) or "")
-        for key in ("title", "mechanism_family", "source_kind", "todo_id")
-    ).lower()
-    return any(keyword in selected_text for keyword in GENERIC_VERIFIER_HANDOFF_KEYWORDS)
-
-
-def _maybe_close_satisfied_generic_handoff(
-    *,
-    registry_path: Path,
-    runtime_root_arg: str | None,
-    goal_id: str,
-    todo_id: str,
-    agent_id: str,
-    selected: dict[str, object],
-    action: str,
-    execute: bool,
-    complete_selected_todo: bool,
-    frontier_packet: dict[str, object],
-) -> dict[str, object] | None:
-    if action != "advance_todo":
-        return None
-    registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(registry, runtime_root_arg)
-    graph = build_research_evidence_graph_from_rollout_events(
-        goal_id=goal_id,
-        rollout_events=load_rollout_events(rollout_event_log_path(runtime_root, goal_id)),
-    )
-    decisions = build_research_decision_candidates(graph)
-    if not _generic_handoff_is_satisfied(
-        selected=selected,
-        evidence_graph=graph,
-        decisions=decisions,
-    ):
-        return None
-
-    completion = (
-        _complete_selected_todo(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            todo_id=todo_id,
-            agent_id=agent_id,
-            action="satisfied_generic_handoff",
-            execute=True,
-        )
-        if execute and complete_selected_todo
-        else {"requested": complete_selected_todo, "executed": False}
-    )
-    return {
-        "ok": True,
-        "schema_version": AUTO_RESEARCH_WORKER_TURN_SCHEMA_VERSION,
-        "mode": "execute" if execute else "dry_run",
-        "goal_id": goal_id,
-        "agent_id": agent_id,
-        "selected_todo_id": todo_id,
-        "selected_action": action,
-        "executed": bool(execute and complete_selected_todo),
-        "artifact_status": "satisfied_generic_handoff_closed",
-        "decision_summary": {
-            "validated_promotion_candidate_count": len(decisions.get("validated_promotion_candidates") or []),
-            "holdout_improved": bool(graph.get("holdout_improved")),
-        },
-        "completion": completion,
-        "frontier": frontier_packet,
-        "public_boundary": {
-            "source": "rollout_event_log_and_todo_projection",
-            "raw_logs_recorded": False,
-            "private_artifacts_recorded": False,
-            "absolute_paths_recorded": False,
-            "credentials_recorded": False,
-        },
-    }
+def _executed_successor_todo_ids(successor_todos: dict[str, object]) -> list[str]:
+    successors = successor_todos.get("successors")
+    if not isinstance(successors, list):
+        return []
+    todo_ids: list[str] = []
+    for successor in successors:
+        if not isinstance(successor, dict):
+            continue
+        todo_id = successor.get("todo_id")
+        if isinstance(todo_id, str) and todo_id:
+            todo_ids.append(todo_id)
+    return todo_ids
 
 
 def _complete_selected_todo(
@@ -387,9 +306,11 @@ def _complete_selected_todo(
     agent_id: str,
     action: str,
     execute: bool,
+    successor_todo_ids: list[str] | None = None,
 ) -> dict[str, object]:
     if not execute:
         return {"requested": True, "executed": False}
+    linked_successors = successor_todo_ids or []
     result = complete_goal_todo(
         registry_path=registry_path,
         goal_id=goal_id,
@@ -401,7 +322,8 @@ def _complete_selected_todo(
             f"state-summary agent={agent_id} action={action} wrote public-safe local artifact "
             "and obeyed quota/frontier before completion"
         ),
-        no_followup=True,
+        no_followup=not linked_successors,
+        successor_todo_ids=linked_successors or None,
         side_agent_self_merged=True,
         dry_run=False,
     )
@@ -413,6 +335,7 @@ def _complete_selected_todo(
         "todo_id": result.get("todo_id"),
         "status": "done" if result.get("completed") else None,
         "side_agent_self_merged": bool(result.get("side_agent_self_merged")),
+        "successor_todo_ids": result.get("successor_todo_ids") or linked_successors,
     }
 
 
@@ -448,6 +371,7 @@ def load_auto_research_worker_frontier(
     )
     frontier = projection["frontier"]
     selected = frontier.get("selected") if isinstance(frontier, dict) else None
+    completion = frontier.get("completion") if isinstance(frontier, dict) else None
     return {
         "ok": True,
         "schema_version": AUTO_RESEARCH_WORKER_FRONTIER_SCHEMA_VERSION,
@@ -468,6 +392,7 @@ def load_auto_research_worker_frontier(
             "runnable_count": len(frontier.get("runnable") or []) if isinstance(frontier, dict) else 0,
             "blocked_count": len(frontier.get("blocked") or []) if isinstance(frontier, dict) else 0,
             "source_kind": frontier.get("source_kind") if isinstance(frontier, dict) else None,
+            "completion": completion if isinstance(completion, dict) else None,
         },
         "public_boundary": {
             "source": "loopx_quota_and_auto_research_frontier",
@@ -514,6 +439,28 @@ def run_auto_research_worker_turn(
     action = normalize_auto_research_action(raw_action)
     todo_id = str((selected or {}).get("todo_id") or "")
     if not selected or not todo_id:
+        completion = (
+            frontier_packet["frontier"].get("completion")
+            if isinstance(frontier_packet.get("frontier"), dict)
+            else None
+        )
+        if isinstance(completion, dict) and completion.get("quiet_completion_allowed") is True:
+            return {
+                "ok": True,
+                "schema_version": AUTO_RESEARCH_WORKER_TURN_SCHEMA_VERSION,
+                "mode": "quiet_completion",
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "executed": False,
+                "completion": completion,
+                "frontier": frontier_packet,
+                "public_boundary": {
+                    "raw_logs_recorded": False,
+                    "private_artifacts_recorded": False,
+                    "absolute_paths_recorded": False,
+                    "credentials_recorded": False,
+                },
+            }
         return {
             "ok": True,
             "schema_version": AUTO_RESEARCH_WORKER_TURN_SCHEMA_VERSION,
@@ -523,20 +470,6 @@ def run_auto_research_worker_turn(
             "executed": False,
             "frontier": frontier_packet,
         }
-    cleanup = _maybe_close_satisfied_generic_handoff(
-        registry_path=registry_path,
-        runtime_root_arg=runtime_root_arg,
-        goal_id=goal_id,
-        todo_id=todo_id,
-        agent_id=agent_id,
-        selected=selected,
-        action=action,
-        execute=execute,
-        complete_selected_todo=complete_selected_todo,
-        frontier_packet=frontier_packet,
-    )
-    if cleanup is not None:
-        return cleanup
     if action not in SUPPORTED_WORKER_ACTIONS:
         return {
             "ok": True,
@@ -609,6 +542,7 @@ def run_auto_research_worker_turn(
             decision_summary=artifact["decision_summary"],
             execute=True,
         )
+        successor_todo_ids = _executed_successor_todo_ids(successor_todos)
         followup = first_successor_followup(successor_todos)
         completion = (
             _complete_selected_todo(
@@ -618,6 +552,7 @@ def run_auto_research_worker_turn(
                 agent_id=agent_id,
                 action=action,
                 execute=True,
+                successor_todo_ids=successor_todo_ids,
             )
             if complete_selected_todo
             else {"requested": False}

@@ -80,6 +80,9 @@ def run_demo(
         goal_id=goal_id,
         role="user",
         text=user_todo,
+        task_class="user_gate",
+        action_kind="demo_goal_decision",
+        global_gate=True,
     )
     agent_todo_payload = add_goal_todo(
         registry_path=registry_path,
@@ -159,7 +162,7 @@ def run_demo(
         ],
         "canonical_dashboard_status_url": "http://127.0.0.1:8766/status.json",
         "dashboard_app_commands": [
-            "cd ~/loopx/apps/dashboard",
+            "cd ~/loopx/apps/presentation/dashboard",
             "npm install",
             "npm run dev",
         ],

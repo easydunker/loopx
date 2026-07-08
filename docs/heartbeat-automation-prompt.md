@@ -297,7 +297,8 @@ If the result says should_run=false:
 
   loopx --registry "$HOME/.codex/loopx/registry.global.json" quota monitor-poll --goal-id <GOAL_ID> --source heartbeat --execute
 
-  Then rerun quota should-run. If it remains monitor-only, return quiet
+  Then rerun quota should-run. If it remains monitor-only after an explicit
+  frontier delta such as watch-lane continuation or no-follow-up, return quiet
   DONT_NOTIFY: no delivery edits and no spend. Keep the automation active:
   unchanged monitor-only polls are not self-stop signals. If the next guard
   reports autonomous_replan_required or another hard
@@ -396,11 +397,9 @@ If the result says should_run=true:
    production actions, or repository rules that explicitly require review.
 6. Run the smallest useful validation.
 7. Write back changed files, validation, critic, and next action to the active
-   state. If the step discovers a concrete user/owner action, do not hide it in
-   `Next Action`, a review doc, or chat. Add it to the active-state user todo
-   queue with:
-
-   loopx todo add --goal-id <GOAL_ID> --role user --text "<public-safe user/owner action>"
+   state. If a user/owner todo appears, do not hide it in prose:
+   `loopx todo add --goal-id <GOAL_ID> --role user --task-class user_gate --blocks-agent <agent-id>`
+   or `loopx todo add --goal-id <GOAL_ID> --role user --task-class user_action`.
 
    Use `--role agent` for project-agent follow-up work.
    For non-trivial feature slices, complete the current todo only after adding

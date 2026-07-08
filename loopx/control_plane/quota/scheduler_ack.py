@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .decision_summary import compact_quota_decision, quota_decision_agent_id
+from ..runtime.time import now_local_iso
 from ..scheduler.scheduler_hint import (
     build_codex_app_scheduler_ack_event,
     build_scheduler_ack_plan,
@@ -22,7 +22,7 @@ QUOTA_SCHEDULER_ACK_CLASSIFICATION = "quota_scheduler_ack"
 
 
 def _now_local() -> str:
-    return datetime.now(timezone.utc).astimezone().replace(microsecond=0).isoformat()
+    return now_local_iso()
 
 
 def scheduler_ack_failure(
@@ -59,6 +59,8 @@ def build_quota_scheduler_ack_event(
     applied_rrule: str,
     surface: str = CODEX_APP_SURFACE,
     state_key: str = CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+    reset_token: str | None = None,
+    identity_signature: str | None = None,
     generated_at: str | None = None,
     reason_summary: str | None = None,
 ) -> dict[str, Any]:
@@ -69,6 +71,8 @@ def build_quota_scheduler_ack_event(
         classification=QUOTA_SCHEDULER_ACK_CLASSIFICATION,
         surface=surface,
         state_key=state_key,
+        reset_token=reset_token,
+        identity_signature=identity_signature,
         generated_at=generated_at or _now_local(),
         reason_summary=reason_summary,
         compact_before=compact_quota_decision(before),
@@ -135,6 +139,8 @@ def record_quota_scheduler_ack_for_decision(
             applied_rrule=str(applied_rrule),
             surface=surface,
             state_key=state_key,
+            reset_token=reset_token,
+            identity_signature=identity_signature,
             generated_at=safe_generated_at,
             reason_summary=reason_summary,
         )

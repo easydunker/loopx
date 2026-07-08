@@ -112,10 +112,14 @@ def main() -> int:
     assert "LOOPX_PANE_TICK_SUMMARY" in launcher_source
     assert "LOOPX_PANE_TICK_OUTPUT_ARTIFACT" in launcher_source
     assert "LOOPX_PANE_BOOTSTRAP_PROMPT" in launcher_source
+    assert "auto-wake.public.jsonl" in launcher_source
+    assert "AUTO_WAKE_LOOP_SCHEMA_VERSION" in launcher_source
     assert "loopx-build-codex-bootstrap-prompt" in runtime_source
     assert "LoopX Agent Bootstrap Context" in runtime_source
     assert "### Role First Move" in runtime_source
     assert "visible_first_steps" in runtime_source
+    assert "### Continuation Target" in runtime_source
+    assert "before no-follow-up" in runtime_source
     assert "codex-visible-first-prompt.public.txt" in launcher_source
     assert "LOOPX_CODEX_FULL_BOOTSTRAP_ARTIFACT" in launcher_source
     assert "不要把完整 bootstrap 合约当作用户首屏复述" in runtime_source
@@ -597,6 +601,8 @@ def main() -> int:
                 create_workspace=True,
                 cwd=temp,
                 codex_trust_workspace=True,
+                auto_wake=True,
+                auto_wake_interval_seconds=5.0,
             )
             os.environ["FAKE_TMUX_CAPTURE_TEXT"] = (
                 "╭────────────────────────╮\n"
@@ -710,6 +716,46 @@ def main() -> int:
                 item["not_ready_reason"] == "codex_tui_busy_or_not_ready"
                 for item in busy_wake["pane_input_ready_checks"]
             ), busy_wake
+            before_usage_limit_log_count = len(
+                tmux_log.read_text(encoding="utf-8").splitlines()
+            )
+            os.environ["FAKE_TMUX_CAPTURE_TEXT"] = (
+                "\n"
+                "■ You've hit your usage limit. Visit\n"
+                "https://chatgpt.com/codex/settings/usage\n"
+                "to purchase more credits or try again at Jul 12th, 2026 6:15 PM.\n\n"
+                "› LoopX pane-local A2A wakeup: read $LOOPX_CODEX_TUI_PROMPT_ARTIFACT\n\n"
+                "  gpt-5.5 high · /tmp/loopx-visible-workspace\n"
+            )
+            usage_limited_wake = wake_visible_multi_agent_panes(
+                session_name="loopx-visible-launcher-smoke",
+                tmux_bin="tmux",
+                lanes=["planner", "reviewer"],
+                execute=True,
+                input_ready_timeout_seconds=0.25,
+            )
+            after_usage_limit_log_entries = [
+                json.loads(line)
+                for line in tmux_log.read_text(encoding="utf-8").splitlines()[
+                    before_usage_limit_log_count:
+                ]
+            ]
+            assert usage_limited_wake["prompt_delivery"] == (
+                "skipped_terminal_pane_backoff"
+            ), usage_limited_wake
+            assert usage_limited_wake["auto_wake_backoff_recommended"] is True, (
+                usage_limited_wake
+            )
+            assert usage_limited_wake["prompt_submit_checks"] == [], usage_limited_wake
+            assert all(
+                item["not_ready_reason"] == "codex_tui_usage_or_rate_limited"
+                and item["backoff_recommended"] is True
+                for item in usage_limited_wake["pane_input_ready_checks"]
+            ), usage_limited_wake
+            assert not any(
+                entry[:1] in (["paste-buffer"], ["send-keys"])
+                for entry in after_usage_limit_log_entries
+            ), after_usage_limit_log_entries
 
             git_root_workspace = temp / "git-root" / "lanes" / "planner"
             git_root_workspace.mkdir(parents=True, exist_ok=True)
@@ -815,6 +861,14 @@ def main() -> int:
         assert launch["surviving_lanes"] == ["planner", "reviewer"], launch
         assert launch["script_mode"] == "runtime_local_files", launch
         assert launch["launcher_script_count"] == 2, launch
+        assert launch["auto_wake"]["schema_version"] == "multi_agent_auto_wake_loop_v0", launch
+        assert launch["auto_wake"]["enabled"] is True, launch
+        assert launch["auto_wake"]["interval_seconds"] == 5.0, launch
+        assert launch["auto_wake"]["target_lanes"] == ["planner", "reviewer"], launch
+        assert launch["auto_wake"]["workflow_driver"] is False, launch
+        assert launch["auto_wake"]["broadcaster_reads_frontier"] is False, launch
+        assert launch["auto_wake"]["broadcaster_selects_todo"] is False, launch
+        assert launch["auto_wake"]["artifact"] == "auto-wake.public.jsonl", launch
         acceptance = launch["visible_acceptance"]
         assert acceptance["schema_version"] == "multi_agent_visible_launch_acceptance_v0", acceptance
         assert acceptance["accepted"] is True, acceptance

@@ -217,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
             "demo",
             "doctor",
             "new-project-prompt",
+            "start-goal",
             "slash-commands",
             "heartbeat-prompt",
             "sync-global",

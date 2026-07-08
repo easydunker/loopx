@@ -431,12 +431,21 @@ The important ordering is goal-level first: required replan is evaluated before
 monitor quiet skip, scoped gate wait, or an individual agent's no-candidate
 state. Those local states may remain visible, but they cannot clear a required
 replan. An acknowledgement without a vision, todo, acceptance, or no-follow-up
-delta is `replan_noop`.
+delta is `replan_noop`. A future monitor `next_due_at` is scheduler metadata,
+not a frontier delta, and cannot by itself suppress a monitor-only empty-frontier
+replan.
 
 The same ordering applies when an agent records a bounded
 `replan_trigger_summary` in its vision packet. Status/quota exposes that trigger
 as a goal-frontier `acceptance_gaps[]` entry. If no advancement frontier remains,
 the gap becomes a replan trigger before the lane can quietly back off.
+
+Long runnable lanes also pass through this machine. When the current agent can
+select about 15 advancement todos, or about 20 open todos with advancement work
+still present, quota should trigger a bounded vision replan before continuing
+linearly. The replan reads the agent-scoped evidence log, uses bounded public
+research when local evidence is insufficient for a public claim, then groups,
+prunes, or reprioritizes the chain into the next high-value runnable slice.
 
 The same ordering also applies to `vision_checkpoint_v0`: if a role records
 material progress but omits both a vision patch and an unchanged/no-follow-up

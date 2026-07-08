@@ -27,6 +27,7 @@ from .worker_loop import run_auto_research_worker_loop
 from ..multi_agent.collective_round_ledger import (
     build_multi_agent_collective_round_ledger,
 )
+from ...control_plane.todos.contract import normalize_required_write_scopes
 
 
 AppendEvidence = Callable[[str], dict[str, object]]
@@ -46,6 +47,8 @@ AUTO_RESEARCH_SEED_ACTION_ORDER = {
 AUTO_RESEARCH_SEED_PREREQUISITE_ACTION_BY_ACTION = dict(
     zip(AUTO_RESEARCH_SEED_ACTION_CHAIN[1:], AUTO_RESEARCH_SEED_ACTION_CHAIN)
 )
+AUTO_RESEARCH_DEMO_CONTROL_WRITE_SCOPE = ("examples/**", "experiments/**", ".local/**")
+AUTO_RESEARCH_DEMO_AVAILABLE_CAPABILITIES = ("benchmark_runner",)
 
 
 def _prepare_visible_demo_workspace_route(
@@ -94,17 +97,30 @@ def _prepare_visible_demo_workspace_route(
     }
 
 
+def _visible_demo_goal_write_scope(
+    preset_context: dict[str, object] | None,
+) -> list[str]:
+    scopes = list(AUTO_RESEARCH_DEMO_CONTROL_WRITE_SCOPE)
+    if isinstance(preset_context, dict):
+        scopes.extend(
+            normalize_required_write_scopes(preset_context.get("editable_scope"))
+        )
+    return list(dict.fromkeys(scopes))
+
+
 def _seed_visible_demo_control_plane(
     *,
     demo_root: Path,
     goal_id: str,
     objective: str,
     supervisor: dict[str, object],
+    preset_context: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], Path, str]:
     """Create a tiny demo-local LoopX queue for visible workers."""
 
     from ...bootstrap import bootstrap_project
     from ...configure_goal import configure_goal
+    from ...state_refresh import now_local, replace_next_action_section
     from ...todos import add_goal_todo
 
     control_project = demo_root / "visible-control-plane"
@@ -127,7 +143,7 @@ def _seed_visible_demo_control_plane(
         spawn_allowed=True,
         max_children=4,
         allowed_domains=["auto-research-demo"],
-        write_scope=["examples/**", "experiments/**", ".local/**"],
+        write_scope=_visible_demo_goal_write_scope(preset_context),
         claim_ttl_minutes=60,
         onboarding_scan_enabled=False,
         accept_onboarding_agent_todos=False,
@@ -137,6 +153,17 @@ def _seed_visible_demo_control_plane(
         dry_run=False,
         sync_global=False,
     )
+    state_file = control_project / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
+    if state_file.exists():
+        updated_state, state_changed = replace_next_action_section(
+            state_file.read_text(encoding="utf-8"),
+            next_action=(
+                "Goal-level route delegates to role frontier; panes own execution."
+            ),
+            updated_at=now_local(),
+        )
+        if state_changed:
+            state_file.write_text(updated_state, encoding="utf-8")
 
     lanes = [lane for lane in supervisor.get("lanes") or [] if isinstance(lane, dict)]
     agents = sorted(
@@ -164,6 +191,17 @@ def _seed_visible_demo_control_plane(
     registry_payload = json.loads(control_registry.read_text(encoding="utf-8"))
     for goal in registry_payload.get("goals", []):
         if isinstance(goal, dict) and str(goal.get("id")) == goal_id:
+            coordination = goal.setdefault("coordination", {})
+            if isinstance(coordination, dict):
+                capabilities = [
+                    str(value).strip()
+                    for value in coordination.get("available_capabilities", [])
+                    if str(value).strip()
+                ]
+                for capability in AUTO_RESEARCH_DEMO_AVAILABLE_CAPABILITIES:
+                    if capability not in capabilities:
+                        capabilities.append(capability)
+                coordination["available_capabilities"] = capabilities
             goal["workspace_guard_policy"] = {
                 "schema_version": "loopx_workspace_guard_policy_v0",
                 "side_agent_independent_worktree_required": False,
@@ -280,6 +318,7 @@ def _command_text(
     no_attach: bool = False,
     live_evidence: bool = False,
     wake_visible_after_launch: bool = False,
+    configure_visible_worker_turn: bool = False,
     tracking_goal_id: str | None = None,
     output_language: str = "en",
 ) -> str:
@@ -314,6 +353,8 @@ def _command_text(
         parts.extend(["--live-evidence", "<public-safe-live-evidence.json>"])
     if wake_visible_after_launch:
         parts.append("--wake-visible-after-launch")
+    if configure_visible_worker_turn:
+        parts.append("--configure-visible-worker-turn")
     return " ".join(parts)
 
 
@@ -539,6 +580,7 @@ def _build_collective_round_summary(
         verification.get("verified") is True
         and verification.get("dev_metric_over_baseline") is True
         and holdout_metric is not None
+        and visible_role_participation_verified
     )
     return {
         "schema_version": "auto_research_collective_round_summary_v0",
@@ -875,6 +917,16 @@ def _load_visible_wake_into_payload(
         if isinstance(wake.get("driver_contract"), dict)
         else {}
     )
+    prompt_submit_checks = wake.get("prompt_submit_checks") or []
+    pane_input_ready_checks = wake.get("pane_input_ready_checks") or []
+    not_ready_reasons = sorted(
+        {
+            str(check.get("not_ready_reason"))
+            for check in pane_input_ready_checks
+            if isinstance(check, dict) and check.get("not_ready_reason")
+        }
+    )
+    prompt_delivered = bool(prompt_submit_checks)
     payload["visible_wake"] = {
         "schema_version": wake.get("schema_version"),
         "mode": wake.get("mode"),
@@ -888,12 +940,15 @@ def _load_visible_wake_into_payload(
         "broadcaster_selects_todo": bool(wake.get("broadcaster_selects_todo")),
         "pane_decision_owner": wake.get("pane_decision_owner"),
         "pane_input_ready_verified": wake.get("pane_input_ready_verified") is True,
-        "pane_input_ready_checks": wake.get("pane_input_ready_checks") or [],
+        "pane_input_ready_checks": pane_input_ready_checks,
         "pane_input_ready_timeout_seconds": wake.get("pane_input_ready_timeout_seconds"),
         "ready_lanes": wake.get("ready_lanes") or [],
         "not_ready_lanes": wake.get("not_ready_lanes") or [],
-        "prompt_submit_checks": wake.get("prompt_submit_checks") or [],
+        "not_ready_reasons": not_ready_reasons,
+        "prompt_submit_checks": prompt_submit_checks,
+        "prompt_delivered": prompt_delivered,
         "prompt_delivery": wake.get("prompt_delivery"),
+        "auto_wake_backoff_recommended": wake.get("auto_wake_backoff_recommended") is True,
         "driver_contract_schema": driver.get("schema_version"),
         "driver_owner_layer": driver.get("owner_layer"),
         "boundary": wake.get("boundary"),
@@ -902,6 +957,12 @@ def _load_visible_wake_into_payload(
     if isinstance(visible_proof, dict):
         visible_proof["cadence_wake_loaded"] = True
         prompt_delivery = wake.get("prompt_delivery")
+        cadence_wake_pending_reason = None
+        if not prompt_delivered:
+            if prompt_delivery == "skipped_no_input_ready_panes":
+                cadence_wake_pending_reason = "pane_not_ready"
+            elif prompt_delivery == "skipped_terminal_pane_backoff":
+                cadence_wake_pending_reason = "terminal_backoff"
         visible_proof["cadence_wake_verified"] = (
             wake.get("mode") == "execute"
             and wake.get("coordination_model") == "decentralized_state_a2a"
@@ -913,9 +974,12 @@ def _load_visible_wake_into_payload(
             in {
                 "tmux_paste_buffer_after_codex_tui_first_turn_ready",
                 "tmux_paste_buffer_after_ready_subset",
-                "skipped_no_input_ready_panes",
             }
+            and prompt_delivered
         )
+        visible_proof["cadence_wake_prompt_delivered"] = prompt_delivered
+        visible_proof["cadence_wake_pending_reason"] = cadence_wake_pending_reason
+        visible_proof["cadence_wake_not_ready_reasons"] = not_ready_reasons
 
 
 def _numeric_metric(value: object) -> float | None:
@@ -1152,6 +1216,7 @@ def run_auto_research_demo_e2e(
     agent_specs: Sequence[str] | None = None,
     run_worker_loop: bool = False,
     worker_loop_rounds: int = 4,
+    configure_visible_worker_turn: bool = False,
     visible_live_evidence_wait_seconds: float = 30.0,
 ) -> dict[str, object]:
     if launch_visible and not execute:
@@ -1198,6 +1263,7 @@ def run_auto_research_demo_e2e(
         tmux_bin=tmux_bin,
         reasoning_effort=reasoning_effort,
         output_language=output_language,
+        configure_visible_worker_turn=configure_visible_worker_turn,
     )
     execution_kind = (
         "loopx_worker_loop"
@@ -1315,6 +1381,17 @@ def run_auto_research_demo_e2e(
                 tracking_goal_id=tracking_goal or None,
                 output_language=output_language,
             ),
+            "one_command_visible_worker_turn_validation": _command_text(
+                cli_bin=cli_bin,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                execute=True,
+                launch_visible=True,
+                no_attach=True,
+                configure_visible_worker_turn=True,
+                tracking_goal_id=tracking_goal or None,
+                output_language=output_language,
+            ),
             "one_command_worker_loop_with_visible_lanes": _command_text(
                 cli_bin=cli_bin,
                 goal_id=goal_id,
@@ -1354,6 +1431,12 @@ def run_auto_research_demo_e2e(
         "visible_worker_proof": build_auto_research_live_worker_proof(
             launch_visible=launch_visible,
         ),
+        "visible_worker_turn_validation": {
+            "schema_version": "auto_research_visible_worker_turn_validation_v0",
+            "configured": bool(configure_visible_worker_turn),
+            "counts_as_research_evidence_without_role_output": False,
+            "manual_research_required_is_blocker_not_progress": True,
+        },
     }
     if not execute:
         payload["worker_loop_preview"] = {
@@ -1391,6 +1474,7 @@ def run_auto_research_demo_e2e(
                     goal_id=goal_id,
                     objective=objective,
                     supervisor=supervisor,
+                    preset_context=preset_context,
                 )
                 payload["visible_control_plane"] = visible_control
             return visible_control, visible_registry_path, visible_runtime_root_arg

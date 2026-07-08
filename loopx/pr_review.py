@@ -7,18 +7,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .control_plane.runtime.time import now_utc_iso
+from .presentation.markdown import as_dict as _as_dict
+from .presentation.markdown import as_list as _as_list
+from .presentation.public_safety import public_safe_boundary, redact_public_text
+
 
 COMMAND = "/loopx-pr-review"
 SCHEMA_VERSION = "loopx_pr_review_command_response_v0"
 
-BOUNDARY = {
-    "raw_logs_recorded": False,
-    "raw_transcripts_recorded": False,
-    "raw_connector_payloads_recorded": False,
-    "credential_values_recorded": False,
-    "absolute_paths_recorded": False,
-    "private_source_bodies_recorded": False,
-}
+BOUNDARY = public_safe_boundary()
 
 SOURCE_SURFACES = [
     "GitHub pull request metadata",
@@ -26,11 +24,6 @@ SOURCE_SURFACES = [
     "GitHub pull request changed-file list",
     "GitHub pull request status check rollup",
 ]
-
-LOCAL_PATH_PATTERNS = (
-    re.compile(r"/(?:Users|home|private|tmp|var)/[^\s`|,)]+"),
-    re.compile(r"[A-Za-z]:\\\\Users\\\\[^\s`|,)]+"),
-)
 
 RUNTIME_OR_CLI_PREFIXES = (
     "src/",
@@ -73,7 +66,7 @@ CODE_EXTENSIONS = (
 )
 
 UI_PREFIXES = (
-    "apps/dashboard/",
+    "apps/presentation/dashboard/",
     "apps/web/",
     "apps/frontend/",
     "apps/site/",
@@ -88,17 +81,11 @@ UI_PREFIXES = (
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return now_utc_iso()
 
 
 def _redact_text(value: object, *, limit: int = 320) -> str:
-    text = str(value or "").strip()
-    for pattern in LOCAL_PATH_PATTERNS:
-        text = pattern.sub("<local-path-redacted>", text)
-    text = re.sub(r"\s+", " ", text)
-    if len(text) > limit:
-        return text[: max(0, limit - 1)].rstrip() + "..."
-    return text
+    return redact_public_text(value, limit=limit)
 
 
 def _join_short(items: list[str], *, limit: int = 3, fallback: str = "未提供") -> str:
@@ -106,14 +93,6 @@ def _join_short(items: list[str], *, limit: int = 3, fallback: str = "未提供"
     if not compact:
         return fallback
     return "、".join(compact[:limit])
-
-
-def _as_dict(value: object) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_list(value: object) -> list[Any]:
-    return value if isinstance(value, list) else []
 
 
 def _run_gh_json(args: list[str], *, cwd: Path | None = None) -> Any:

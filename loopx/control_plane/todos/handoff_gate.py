@@ -21,6 +21,7 @@ from .contract import (
 
 
 TODO_HANDOFF_GATE_SCHEMA_VERSION = "todo_handoff_gate_v0"
+TODO_ARCHIVE_STATE_ACTIVE = "active"
 
 
 class HandoffGateState(str, Enum):
@@ -45,6 +46,11 @@ def _todo_done(item: dict[str, Any]) -> bool:
 
 def _todo_text(item: dict[str, Any]) -> str:
     return str(item.get("text") or "").strip()
+
+
+def _todo_archive_state(item: dict[str, Any]) -> str:
+    value = str(item.get("archive_state") or TODO_ARCHIVE_STATE_ACTIVE).strip()
+    return value or TODO_ARCHIVE_STATE_ACTIVE
 
 
 def _successor_todo_ids(
@@ -85,6 +91,17 @@ def _successor_todo_ids(
             if candidate_id not in successor_ids:
                 successor_ids.append(candidate_id)
     return successor_ids
+
+
+def _stale_handoff_closeout_replan_required(gate: dict[str, Any]) -> bool:
+    if _todo_done(gate):
+        return False
+    label = " ".join(
+        str(gate.get(key) or "")
+        for key in ("action_kind", "title", "text")
+        if str(gate.get(key) or "").strip()
+    ).lower()
+    return "stale" in label and "handoff" in label and "closeout" in label
 
 
 def _handoff_gate_state(
@@ -149,6 +166,12 @@ def _compact_handoff_gate(
     superseded_by = normalize_todo_id(payload.get("superseded_by"))
     if superseded_by:
         payload["superseded_by"] = superseded_by
+    if _stale_handoff_closeout_replan_required(gate):
+        payload["route_continuation_replan_required"] = True
+        payload.setdefault(
+            "route_continuation_reason",
+            "stale handoff closeout requires a bounded route continuation replan",
+        )
     if successor_ids:
         payload["successor_todo_ids"] = successor_ids
     return {key: value for key, value in payload.items() if value not in (None, "")}
@@ -161,6 +184,8 @@ def build_todo_handoff_gate_states(items: Iterable[Any]) -> list[dict[str, Any]]
     gates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for item in todo_items:
+        if _todo_archive_state(item) != TODO_ARCHIVE_STATE_ACTIVE:
+            continue
         blocks_agent = normalize_todo_blocks_agent(item.get("blocks_agent"))
         if not blocks_agent:
             continue

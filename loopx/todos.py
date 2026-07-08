@@ -8,13 +8,11 @@ from .agent_registry import (
     primary_agent_id_from_registry,
     registered_agent_ids_from_registry,
     require_registered_agent_id,
-    side_agent_handoff_agent_id_from_registry,
 )
 from .file_lock import exclusive_file_lock
 from .history import load_registry
 from .control_plane.runtime.local_state_write_correctness import build_todo_write_correctness_dry_run_packet
 from .state_refresh import now_local, resolve_goal_state
-from .control_plane.goals.active_state_metadata import todo_role_for_heading
 from .status import (
     MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE,
     active_state_event_projection_fields,
@@ -27,7 +25,6 @@ from .control_plane.todos.contract import (
     TODO_STATUS_DONE,
     TODO_STATUS_OPEN,
     TODO_TASK_CLASS_USER_GATE,
-    TODO_TASK_PATTERN,
     build_todo_id,
     format_todo_metadata_line,
     normalize_required_capabilities,
@@ -46,7 +43,19 @@ from .control_plane.todos.contract import (
     parse_todo_metadata_line,
     todo_done_for_status,
     todo_marker_for_status,
-    todo_status_from_marker,
+)
+from .control_plane.todos.active_state_editing import (
+    TODO_SECTION_HEADINGS,
+    insert_into_existing_section,
+    insert_new_section,
+    replace_updated_at,
+    section_bounds,
+    todo_blocks,
+)
+from .control_plane.todos.completed_archive import archive_completed_todo_lines
+from .control_plane.todos.completion_policy import (
+    linked_successor_from_todo,
+    resolve_completion_policy,
 )
 from .control_plane.todos.event_writeback import (
     complete_event_projected_goal_todo,
@@ -56,15 +65,10 @@ from .control_plane.todos.monitor_metadata import require_monitor_metadata_scope
 from .control_plane.todos.text import (
     inherit_todo_priority,
     normalize_new_todo,
-    todo_priority_prefix,
 )
+from .control_plane.todos.write_policy import require_user_gate_scope, require_user_todo_task_class
 
 
-TODO_SECTION_HEADINGS = {
-    "user": "User Todo / Owner Review Reading Queue",
-    "agent": "Agent Todo",
-}
-COMPLETED_WORK_ARCHIVE_HEADING = "Completed Work Archive"
 TODO_METADATA_FIELDS = (
     "todo_id",
     "status",
@@ -98,11 +102,6 @@ TODO_METADATA_FIELDS = (
     "updated_at",
     "superseded_by",
 )
-
-
-def _is_primary_review_action_kind(value: Any) -> bool:
-    action_kind = str(value or "").strip()
-    return action_kind == "primary_review" or action_kind.startswith("primary_review_")
 
 
 def _attach_todo_write_correctness_dry_run_packet(
@@ -153,149 +152,6 @@ def resolve_todo_state_path(
     if not resolved_state_file.exists():
         raise ValueError(f"active state file does not exist: {resolved_state_file}")
     return resolved_project, resolved_state_file
-
-
-def section_bounds(lines: list[str], role: str) -> tuple[int, int, str] | None:
-    for index, line in enumerate(lines):
-        if not line.startswith("## "):
-            continue
-        heading = line.lstrip("#").strip()
-        if todo_role_for_heading(heading) != role:
-            continue
-        end = len(lines)
-        for next_index in range(index + 1, len(lines)):
-            if lines[next_index].startswith("## "):
-                end = next_index
-                break
-        return index, end, heading
-    return None
-
-
-def heading_index(lines: list[str], heading: str) -> int | None:
-    needle = f"## {heading}"
-    for index, line in enumerate(lines):
-        if line.strip() == needle:
-            return index
-    return None
-
-
-def insert_into_existing_section(lines: list[str], start: int, end: int, todo_line: str) -> None:
-    insert_at = end
-    while insert_at > start + 1 and not lines[insert_at - 1].strip():
-        insert_at -= 1
-    new_lines = todo_line.splitlines()
-    if insert_at == start + 1:
-        new_lines.insert(0, "")
-    if insert_at == end and end < len(lines) and lines[end].startswith("## "):
-        new_lines.append("")
-    lines[insert_at:insert_at] = new_lines
-
-
-def insertion_anchor(lines: list[str], role: str) -> int:
-    if role == "user":
-        agent_bounds = section_bounds(lines, "agent")
-        if agent_bounds:
-            return agent_bounds[0]
-    next_action = heading_index(lines, "Next Action")
-    if next_action is not None:
-        return next_action
-    return len(lines)
-
-
-def insert_new_section(lines: list[str], role: str, todo_line: str) -> None:
-    anchor = insertion_anchor(lines, role)
-    heading = TODO_SECTION_HEADINGS[role]
-    section = [f"## {heading}", "", *todo_line.splitlines(), ""]
-    if anchor > 0 and lines[anchor - 1].strip():
-        section.insert(0, "")
-    lines[anchor:anchor] = section
-
-
-def archive_section_bounds(lines: list[str]) -> tuple[int, int] | None:
-    start = heading_index(lines, COMPLETED_WORK_ARCHIVE_HEADING)
-    if start is None:
-        return None
-    end = len(lines)
-    for next_index in range(start + 1, len(lines)):
-        if lines[next_index].startswith("## "):
-            end = next_index
-            break
-    return start, end
-
-
-def ensure_archive_section(lines: list[str]) -> tuple[int, int]:
-    bounds = archive_section_bounds(lines)
-    if bounds:
-        return bounds
-    if lines and lines[-1].strip():
-        lines.append("")
-    start = len(lines)
-    lines.extend([f"## {COMPLETED_WORK_ARCHIVE_HEADING}", ""])
-    return start, len(lines)
-
-
-def ensure_block_identity(block: dict[str, Any], *, role: str | None, source_section: str | None) -> dict[str, Any]:
-    if block.get("status"):
-        status = normalize_todo_status(block.get("status")) or TODO_STATUS_OPEN
-    else:
-        status = TODO_STATUS_DONE if block.get("done") else TODO_STATUS_OPEN
-    block["status"] = status
-    block["done"] = todo_done_for_status(status)
-    if not block.get("todo_id"):
-        block["todo_id"] = build_todo_id(
-            role=role,
-            source_section=source_section,
-            index=block.get("index"),
-            text=block.get("text"),
-        )
-    return block
-
-
-def todo_blocks(
-    lines: list[str],
-    start: int,
-    end: int,
-    *,
-    role: str | None = None,
-    source_section: str | None = None,
-) -> list[dict[str, Any]]:
-    blocks: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    todo_index = 0
-    for index in range(start + 1, end):
-        match = TODO_TASK_PATTERN.match(lines[index])
-        if match:
-            if current is not None:
-                current["end"] = index
-                ensure_block_identity(current, role=role, source_section=source_section)
-                blocks.append(current)
-            marker, text = match.groups()
-            todo_index += 1
-            status = todo_status_from_marker(marker)
-            current = {
-                "start": index,
-                "end": end,
-                "index": todo_index,
-                "done": todo_done_for_status(status),
-                "status": status,
-                "text": normalize_todo_text(text),
-            }
-            continue
-        if current is not None and lines[index].startswith((" ", "\t")):
-            metadata = parse_todo_metadata_line(lines[index])
-            if metadata:
-                current.update(metadata)
-                continue
-            continuation = lines[index].strip()
-            if continuation:
-                current["text"] = normalize_todo_text(
-                    f"{current.get('text', '')} {continuation}"
-                )
-    if current is not None:
-        current["end"] = end
-        ensure_block_identity(current, role=role, source_section=source_section)
-        blocks.append(current)
-    return blocks
 
 
 def todo_item_status(item: dict[str, Any]) -> str:
@@ -588,38 +444,6 @@ def list_goal_todos(
     return payload
 
 
-def insert_archive_blocks(lines: list[str], blocks: list[list[str]]) -> None:
-    if not blocks:
-        return
-    bounds = ensure_archive_section(lines)
-    insert_at = bounds[1]
-    while insert_at > bounds[0] + 1 and not lines[insert_at - 1].strip():
-        insert_at -= 1
-    new_lines: list[str] = []
-    if insert_at == bounds[0] + 1:
-        new_lines.append("")
-    for block in blocks:
-        new_lines.extend(block)
-    if insert_at < len(lines) and lines[insert_at].startswith("## "):
-        new_lines.append("")
-    lines[insert_at:insert_at] = new_lines
-
-
-def replace_updated_at(text: str, updated_at: str) -> str:
-    if not text.startswith("---"):
-        return text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return text
-    frontmatter = parts[1]
-    body = parts[2]
-    if re.search(r"(?m)^updated_at:\s*.+$", frontmatter):
-        frontmatter = re.sub(r"(?m)^updated_at:\s*.+$", f"updated_at: {updated_at}", frontmatter, count=1)
-    else:
-        frontmatter = frontmatter.rstrip("\n") + f"\nupdated_at: {updated_at}\n"
-    return "---" + frontmatter + "---" + body
-
-
 def matching_todo_block(
     lines: list[str],
     start: int,
@@ -854,6 +678,12 @@ def add_todo_to_lines(
     monitor_metadata: dict[str, Any] | None = None,
     evidence: str | None = None,
 ) -> dict[str, Any]:
+    require_user_todo_task_class(
+        role=role,
+        task_class=task_class,
+        blocks_agent=blocks_agent,
+        global_gate=global_gate,
+    )
     todo_text = normalize_new_todo(text)
     normalized_monitor_metadata = require_monitor_metadata_scope(
         monitor_metadata=monitor_metadata,
@@ -984,35 +814,6 @@ def add_todo_to_lines(
     }
 
 
-def require_user_gate_scope(
-    *,
-    registry_path: Path,
-    goal_id: str,
-    role: str,
-    task_class: str | None,
-    blocks_agent: str | None,
-    global_gate: bool | None,
-) -> None:
-    if role != "user" or task_class != TODO_TASK_CLASS_USER_GATE:
-        return
-    if global_gate and blocks_agent:
-        raise ValueError(
-            "user_gate cannot set both blocks_agent and global_gate=true; "
-            "use blocks_agent for one registered agent or global_gate=true for a goal-wide gate"
-        )
-    registered_agents = registered_agent_ids_from_registry(registry_path, goal_id)
-    if len(registered_agents) <= 1:
-        return
-    if blocks_agent or global_gate is True:
-        return
-    raise ValueError(
-        "multi-agent user_gate requires an explicit scope: pass --blocks-agent "
-        "<registered-agent> (or --agent-id <registered-agent> for authoring) "
-        "when the gate blocks one lane, or pass --global-gate when it genuinely "
-        "blocks every registered agent"
-    )
-
-
 def add_goal_todo(
     *,
     registry_path: Path,
@@ -1039,6 +840,12 @@ def add_goal_todo(
 ) -> dict[str, Any]:
     if role not in TODO_SECTION_HEADINGS:
         raise ValueError("todo role must be one of: user, agent")
+    require_user_todo_task_class(
+        role=role,
+        task_class=task_class,
+        blocks_agent=blocks_agent,
+        global_gate=True if global_gate else None,
+    )
     if global_gate and not (role == "user" and task_class == TODO_TASK_CLASS_USER_GATE):
         raise ValueError("global_gate is only valid for `--role user --task-class user_gate`")
     todo_text = normalize_new_todo(text)
@@ -1450,6 +1257,12 @@ def update_goal_todo(
             effective_blocks_agent = effective_agent_id
         target_global_gate = True if global_gate else existing_global_gate
         if not todo_done_for_status(target_status):
+            require_user_todo_task_class(
+                role=target_role,
+                task_class=target_task_class,
+                blocks_agent=target_blocks_agent,
+                global_gate=target_global_gate,
+            )
             require_user_gate_scope(
                 registry_path=registry_path,
                 goal_id=goal_id,
@@ -1558,90 +1371,34 @@ def complete_goal_todo(
         original = resolved_state_file.read_text(encoding="utf-8")
         lines = original.splitlines()
         updated_at = now_local()
-        effective_claimed_by = (
-            require_registered_agent_id(
-                registry_path=registry_path,
-                goal_id=goal_id,
-                agent_id=claimed_by,
-            )
-            if claimed_by
-            else None
-        )
-        primary_agent = primary_agent_id_from_registry(registry_path, goal_id)
-        registered_agents = registered_agent_ids_from_registry(registry_path, goal_id)
-        configured_handoff_agent = side_agent_handoff_agent_id_from_registry(
-            registry_path,
-            goal_id,
-            agent_id=effective_claimed_by,
-        )
-        handoff_agent = configured_handoff_agent or primary_agent
-        if configured_handoff_agent:
-            handoff_agent = require_registered_agent_id(
-                registry_path=registry_path,
-                goal_id=goal_id,
-                agent_id=configured_handoff_agent,
-                field="side_agent_handoff_agent",
-            )
-        effective_next_claimed_by = (
-            require_registered_agent_id(
-                registry_path=registry_path,
-                goal_id=goal_id,
-                agent_id=next_claimed_by,
-                field="next_claimed_by",
-            )
-            if next_claimed_by
-            else None
-        )
-        if effective_claimed_by and not primary_agent:
-            raise ValueError(
-                "todo complete with --claimed-by requires coordination.primary_agent "
-                "so LoopX can distinguish the primary agent from side agents"
-            )
-        side_agent_completion = bool(
-            effective_claimed_by and primary_agent and effective_claimed_by != primary_agent
-        )
-        explicit_primary_review_handoff = bool(
-            side_agent_completion
-            and next_agent_todo
-            and not side_agent_self_merged
-            and primary_agent
-            and effective_next_claimed_by == primary_agent
-            and _is_primary_review_action_kind(next_action_kind)
-        )
-        if side_agent_completion:
-            if side_agent_self_merged and not evidence:
-                raise ValueError(
-                    "--side-agent-self-merged requires --evidence with a public-safe "
-                    "self-merge, commit, and validation summary"
-                )
-            if not side_agent_self_merged and not next_agent_todo:
-                raise ValueError(
-                    f"side-agent completion by {effective_claimed_by!r} requires "
-                    "--next-agent-todo for independent handoff, verification, and merge, "
-                    "or --side-agent-self-merged with --evidence for a small validated self-merge"
-                )
-            if not side_agent_self_merged and handoff_agent == effective_claimed_by:
-                raise ValueError(
-                    "side-agent handoff todo cannot be claimed by the completing side agent; "
-                    "use --side-agent-self-merged with --evidence for same-agent delivery, "
-                    "or configure side_agent_handoff_agent to another registered agent"
-                )
-            if (
-                not side_agent_self_merged
-                and effective_next_claimed_by
-                and effective_next_claimed_by != handoff_agent
-                and not explicit_primary_review_handoff
-            ):
-                raise ValueError(
-                    f"side-agent completion handoff todo must be claimed_by handoff_agent={handoff_agent!r}"
-                )
-            if next_agent_todo and not side_agent_self_merged and not effective_next_claimed_by:
-                effective_next_claimed_by = handoff_agent
-        if effective_next_claimed_by and not next_agent_todo:
-            raise ValueError("--next-claimed-by requires --next-agent-todo")
         normalized_successor_todo_ids = normalize_todo_id_list(successor_todo_ids)
         if successor_todo_ids and not normalized_successor_todo_ids:
             raise ValueError("successor_todo_ids must contain public todo_<letters-digits-underscore-hyphen> tokens")
+        linked_successors = []
+        for successor_todo_id in normalized_successor_todo_ids:
+            successor_match = find_todo_block(lines, todo_id=successor_todo_id)
+            if successor_match:
+                successor_role, _section, _start, _end, successor_block = successor_match
+                successor_item = dict(successor_block)
+                successor_item["role"] = successor_role
+                linked_successors.append(linked_successor_from_todo(successor_item))
+        completion_policy = resolve_completion_policy(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            claimed_by=claimed_by,
+            next_claimed_by=next_claimed_by,
+            next_agent_todo=next_agent_todo,
+            next_action_kind=next_action_kind,
+            side_agent_self_merged=side_agent_self_merged,
+            evidence=evidence,
+            linked_successors=linked_successors,
+        )
+        effective_claimed_by = completion_policy.effective_claimed_by
+        primary_agent = completion_policy.primary_agent
+        registered_agents = completion_policy.registered_agents
+        effective_next_claimed_by = completion_policy.effective_next_claimed_by
+        side_agent_completion = completion_policy.side_agent_completion
+        effective_side_agent_self_merged = completion_policy.side_agent_self_merged
         if not find_todo_block(lines, todo_id=todo_id, role=role):
             event_context = event_projection_todo_context(
                 registry_path=registry_path,
@@ -1668,7 +1425,7 @@ def complete_goal_todo(
                     next_task_class=next_task_class,
                     next_action_kind=next_action_kind,
                     side_agent_completion=side_agent_completion,
-                    side_agent_self_merged=side_agent_self_merged,
+                    side_agent_self_merged=effective_side_agent_self_merged,
                     registered_agents=registered_agents,
                     primary_agent=primary_agent,
                     updated_at=updated_at,
@@ -1695,7 +1452,7 @@ def complete_goal_todo(
             if next_agent_todo
             else None
         )
-        if side_agent_completion and next_agent_todo and not side_agent_self_merged:
+        if side_agent_completion and next_agent_todo and not effective_side_agent_self_merged:
             next_blocks_agent = effective_claimed_by
         next_user_blocks_agent = None
         if next_user_todo and len(registered_agents) > 1:
@@ -1750,7 +1507,8 @@ def complete_goal_todo(
         **update_result,
         "changed": changed,
         "next_todos": next_results,
-        "side_agent_self_merged": bool(side_agent_completion and side_agent_self_merged),
+        "side_agent_self_merged": effective_side_agent_self_merged,
+        "linked_handoff_successor_id": completion_policy.linked_handoff_successor_id,
         "state_file": str(resolved_state_file),
         "project": str(resolved_project) if resolved_project else None,
         "updated_at": updated_at if changed else None,
@@ -1910,49 +1668,15 @@ def archive_completed_todos(
     with exclusive_file_lock(resolved_state_file):
         original = resolved_state_file.read_text(encoding="utf-8")
         lines = original.splitlines()
-        bounds = section_bounds(lines, role)
-        section = bounds[2] if bounds else TODO_SECTION_HEADINGS[role]
-        moved_blocks: list[list[str]] = []
-        active_done_count = 0
-        moved_count = 0
-        kept_done_count = 0
-
-        if bounds:
-            blocks = todo_blocks(lines, bounds[0], bounds[1], role=role, source_section=section)
-            done_blocks = [block for block in blocks if block.get("done") is True]
-            active_done_count = len(done_blocks)
-            move_count = max(0, active_done_count - max_active_done)
-            move_starts = {int(block["start"]) for block in done_blocks[:move_count]}
-            kept_done_count = active_done_count - move_count
-            for block in done_blocks[:move_count]:
-                moved_blocks.append(lines[int(block["start"]) : int(block["end"])])
-            if move_starts:
-                new_lines: list[str] = []
-                index = 0
-                while index < len(lines):
-                    if index in move_starts:
-                        matching = next(
-                            block
-                            for block in done_blocks[:move_count]
-                            if int(block["start"]) == index
-                        )
-                        index = int(matching["end"])
-                        while (
-                            new_lines
-                            and not new_lines[-1].strip()
-                            and index < len(lines)
-                            and not lines[index].strip()
-                        ):
-                            index += 1
-                        continue
-                    new_lines.append(lines[index])
-                    index += 1
-                lines = new_lines
-                insert_archive_blocks(lines, moved_blocks)
-                moved_count = move_count
+        archive_result = archive_completed_todo_lines(
+            lines,
+            role=role,
+            max_active_done=max_active_done,
+        )
+        lines = archive_result.pop("lines")
 
         updated_at = now_local()
-        changed = moved_count > 0
+        changed = bool(archive_result["changed"])
         new_text = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
         if changed:
             new_text = replace_updated_at(new_text, updated_at)
@@ -1962,15 +1686,8 @@ def archive_completed_todos(
     return {
         "ok": True,
         "dry_run": dry_run,
-        "changed": changed,
         "goal_id": goal_id,
-        "role": role,
-        "section": section,
-        "archive_section": COMPLETED_WORK_ARCHIVE_HEADING,
-        "active_done_before": active_done_count,
-        "active_done_after": kept_done_count,
-        "max_active_done": max_active_done,
-        "moved_count": moved_count,
+        **archive_result,
         "state_file": str(resolved_state_file),
         "project": str(resolved_project) if resolved_project else None,
         "updated_at": updated_at if changed else None,
