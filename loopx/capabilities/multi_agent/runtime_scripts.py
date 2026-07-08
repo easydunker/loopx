@@ -578,9 +578,11 @@ if not Path(_loopx).exists():
 # state as dashboards and the tick worker. Passed through from agent-start.
 _global_registry = os.environ.get('LOOPX_GLOBAL_REGISTRY', '').strip()
 
-def _scheduler_hint_seconds() -> int | None:
-    # Read recommended_interval_minutes from quota should-run scheduler_hint.
-    # LoopX publishes the interval under scheduler_hint.codex_app.recommended_interval_minutes.
+def _scheduler_hint() -> tuple:
+    # Returns (interval_seconds: int | None, should_stop: bool).
+    # Reads scheduler_hint from quota should-run:
+    #   - interval from codex_app.recommended_interval_minutes (proxy for local scheduler rate)
+    #   - stop signal from unchanged_poll.after_limits.local_scheduler == "stop_tick_loop"
     try:
         registry_args = ['--registry', _global_registry] if _global_registry else []
         r = subprocess.run(
@@ -590,13 +592,20 @@ def _scheduler_hint_seconds() -> int | None:
         )
         payload = json.loads(r.stdout) if r.stdout else {}
         hint = payload.get('scheduler_hint') if isinstance(payload, dict) else None
-        app_hint = (hint or {}).get('codex_app') if isinstance(hint, dict) else None
+        if not isinstance(hint, dict):
+            return None, False
+        # Check local scheduler stop signal (hot path, always present in should-run output).
+        unchanged_poll = hint.get('unchanged_poll')
+        after_limits = (unchanged_poll or {}).get('after_limits') if isinstance(unchanged_poll, dict) else None
+        local_after = (after_limits or {}).get('local_scheduler') if isinstance(after_limits, dict) else None
+        should_stop = local_after == 'stop_tick_loop'
+        # Read interval from codex_app (LoopX publishes this for all local schedulers).
+        app_hint = hint.get('codex_app')
         minutes = (app_hint or {}).get('recommended_interval_minutes') if isinstance(app_hint, dict) else None
-        if minutes is not None:
-            return max(10, int(float(minutes) * 60))
+        interval = max(10, int(float(minutes) * 60)) if minutes is not None else None
+        return interval, should_stop
     except Exception:
-        pass
-    return None
+        return None, False
 
 print(
     f'\n[LoopX cursor-cli loop] starting — goal={goal} agent={agent}'
@@ -610,14 +619,22 @@ while True:
     result = subprocess.run([tick_worker], env=os.environ.copy())
     if result.returncode == 0:
         tick_count += 1
-        sleep_s = _scheduler_hint_seconds() or tick_interval
+        hint_s, hint_stop = _scheduler_hint()
+        if hint_stop:
+            print(f'\n[LoopX cursor-cli loop] scheduler stop_tick_loop after tick {tick_count}; stopping.\n', flush=True)
+            raise SystemExit(0)
+        sleep_s = hint_s or tick_interval
         print(f'\n[LoopX cursor-cli loop] tick {tick_count} done; sleeping {sleep_s}s\n', flush=True)
         if max_ticks and tick_count >= max_ticks:
             print(f'\n[LoopX cursor-cli loop] reached max_ticks={max_ticks}; stopping.\n', flush=True)
             raise SystemExit(0)
         time.sleep(sleep_s)
     elif result.returncode == 75:
-        sleep_s = _scheduler_hint_seconds() or pause_interval
+        hint_s, hint_stop = _scheduler_hint()
+        if hint_stop:
+            print(f'\n[LoopX cursor-cli loop] scheduler stop_tick_loop while paused; stopping.\n', flush=True)
+            raise SystemExit(0)
+        sleep_s = hint_s or pause_interval
         print(
             f'\n[LoopX cursor-cli loop] quota paused; sleeping {sleep_s}s before retry.\n',
             flush=True,
@@ -627,7 +644,8 @@ while True:
         print(f'\n[LoopX cursor-cli loop] tick worker exited with 2 (config error); stopping.\n', flush=True)
         raise SystemExit(2)
     else:
-        sleep_s = _scheduler_hint_seconds() or pause_interval
+        hint_s, _ = _scheduler_hint()
+        sleep_s = hint_s or pause_interval
         print(
             f'\n[LoopX cursor-cli loop] tick worker exited {result.returncode} '
             f'(error); sleeping {sleep_s}s before retry.\n',

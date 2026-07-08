@@ -8,6 +8,9 @@ Uses fake loopx and fake cursor-agent binaries to verify:
 - successful tick without writeback fails when writeback is required
 - LOOPX_GLOBAL_REGISTRY is passed to quota calls when set
 - loop script only execs a LoopX-managed script (managed-marker check)
+- agent-start rejects unmanaged loop script with surface_not_managed
+- agent-start succeeds (dry-run) against a managed loop script
+- generated Cursor .mdc body has correct writeback command order and --goal-id
 """
 
 from __future__ import annotations
@@ -24,10 +27,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import subprocess
+
 from loopx.capabilities.multi_agent.runtime_scripts import (  # noqa: E402
     CURSOR_CLI_TICK_WORKER_PY,
 )
-from loopx.slash_command_install import MANAGED_MARKER_PREFIX  # noqa: E402
+from loopx.slash_command_install import (  # noqa: E402
+    MANAGED_MARKER_PREFIX,
+    _cursor_loopx_mdc_body,
+)
 
 
 def _write_script(path: Path, content: str) -> None:
@@ -45,8 +53,6 @@ def _run_tick_worker(
     agent: str = "test-agent",
 ) -> tuple[int, str]:
     """Install and run the tick worker in an isolated temp dir, return (exit_code, stdout)."""
-    import subprocess
-
     bin_dir = tmp / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
 
@@ -302,6 +308,80 @@ def main() -> int:
         has_marker = MANAGED_MARKER_PREFIX in loop_script.read_text(encoding="utf-8")
         assert has_marker, "[T6] managed script must contain MANAGED_MARKER_PREFIX"
         print("[T6] managed-marker detection via MANAGED_MARKER_PREFIX: PASS")
+
+        # --- Test 7: agent-start rejects unmanaged loop script ---
+        tmp7 = tmp / "test7"
+        tmp7.mkdir()
+        bin7 = tmp7 / "bin"
+        bin7.mkdir()
+        loop7 = bin7 / "loopx-cursor-cli-loop"
+        loop7.write_text("#!/bin/sh\necho 'user script'\n", encoding="utf-8")
+        loop7.chmod(loop7.stat().st_mode | stat.S_IEXEC)
+        agent_start_result = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--format", "json",
+             "agent-start", "--agent-type", "cursor-cli",
+             "--goal-id", "t7-goal", "--agent-id", "t7-agent",
+             "--project", str(tmp7),
+             "--cursor-home", str(tmp7)],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        assert agent_start_result.returncode != 0, (
+            f"[T7] agent-start must fail for unmanaged loop script, got rc={agent_start_result.returncode}\n"
+            f"{agent_start_result.stdout}"
+        )
+        try:
+            t7_payload = json.loads(agent_start_result.stdout)
+            assert t7_payload.get("action") == "surface_not_managed", (
+                f"[T7] action must be surface_not_managed, got {t7_payload.get('action')!r}\n{t7_payload}"
+            )
+        except json.JSONDecodeError:
+            assert "surface_not_managed" in agent_start_result.stdout or "not a LoopX-managed" in agent_start_result.stdout, (
+                f"[T7] output must mention surface_not_managed or not a LoopX-managed\n{agent_start_result.stdout}"
+            )
+        print("[T7] agent-start rejects unmanaged loop script → surface_not_managed: PASS")
+
+        # --- Test 8: agent-start dry-run succeeds against a managed loop script ---
+        tmp8 = tmp / "test8"
+        tmp8.mkdir()
+        bin8 = tmp8 / "bin"
+        bin8.mkdir()
+        loop8 = bin8 / "loopx-cursor-cli-loop"
+        managed8 = f"# {MANAGED_MARKER_PREFIX} command=loopx-cursor-cli-loop surface=cursor -->\n#!/bin/sh\n"
+        loop8.write_text(managed8, encoding="utf-8")
+        loop8.chmod(loop8.stat().st_mode | stat.S_IEXEC)
+        agent_start_dry = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--format", "json",
+             "agent-start", "--agent-type", "cursor-cli",
+             "--goal-id", "t8-goal", "--agent-id", "t8-agent",
+             "--project", str(tmp8),
+             "--cursor-home", str(tmp8),
+             "--dry-run"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        assert agent_start_dry.returncode == 0, (
+            f"[T8] agent-start --dry-run must succeed for managed loop script, "
+            f"rc={agent_start_dry.returncode}\n{agent_start_dry.stdout}\n{agent_start_dry.stderr}"
+        )
+        print("[T8] agent-start --dry-run succeeds against managed loop script: PASS")
+
+        # --- Test 9: generated .mdc body has correct writeback order and --goal-id ---
+        mdc_body = _cursor_loopx_mdc_body(cli_bin="loopx")
+        assert "refresh-state" in mdc_body, "[T9] mdc body must contain refresh-state"
+        assert "todo complete" in mdc_body, "[T9] mdc body must contain todo complete"
+        assert "quota spend-slot" in mdc_body, "[T9] mdc body must contain quota spend-slot"
+        assert '--goal-id "$LOOPX_GOAL_ID"' in mdc_body, (
+            '[T9] refresh-state must include --goal-id "$LOOPX_GOAL_ID"'
+        )
+        # Verify order within the writeback section.
+        writeback_section = mdc_body[mdc_body.index("## Writeback"):]
+        todo_pos = writeback_section.index("todo complete")
+        refresh_pos = writeback_section.index("refresh-state")
+        spend_pos = writeback_section.index("quota spend-slot")
+        assert todo_pos < refresh_pos < spend_pos, (
+            f"[T9] writeback order must be todo complete → refresh-state → quota spend-slot, "
+            f"got positions in writeback section: todo={todo_pos} refresh={refresh_pos} spend={spend_pos}"
+        )
+        print("[T9] generated .mdc body has correct writeback order (todo complete → refresh-state --goal-id → quota spend-slot): PASS")
 
     print("\nAll cursor-cli tick loop behavioral smokes passed.")
     return 0

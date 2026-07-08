@@ -272,15 +272,15 @@ def _cursor_loopx_mdc_body(*, cli_bin: str) -> str:
                 [
                     "## Writeback after completed delivery",
                     "",
-                    "After a successfully completed delivery segment:",
+                    "After a successfully completed delivery segment, run in this order:",
                     "",
                     "```bash",
-                    f'{cli_bin} $REGISTRY_ARG refresh-state --project "$LOOPX_PROJECT"',
                     f'{cli_bin} $REGISTRY_ARG todo complete --goal-id "$LOOPX_GOAL_ID" --todo-id <todo_id> --claimed-by "$LOOPX_AGENT_ID" --evidence "<public-safe evidence>"',
+                    f'{cli_bin} $REGISTRY_ARG refresh-state --goal-id "$LOOPX_GOAL_ID" --project "$LOOPX_PROJECT" --agent-id "$LOOPX_AGENT_ID"',
                     f'{cli_bin} $REGISTRY_ARG quota spend-slot --goal-id "$LOOPX_GOAL_ID" --slots 1 --source heartbeat --execute --agent-id "$LOOPX_AGENT_ID"',
                     "```",
                     "",
-                    "Run `refresh-state` before `todo complete` and `quota spend-slot` to ensure durable state writeback.",
+                    "Run `todo complete` first, then `refresh-state --goal-id`, then `quota spend-slot`.",
                     "Only spend a slot on validated, bounded completion — not on partial progress.",
                     "The LoopX tick worker verifies that quota accounting changed before it counts the tick complete.",
                 ]
@@ -691,8 +691,19 @@ def render_slash_command_install_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- claude skills: `{claude_skill_dir}`")
     if cursor_rule_dir:
         lines.append(f"- cursor rules: `{cursor_rule_dir}`")
+    cursor_loop_script = payload.get("summary", {}).get("cursor_loop_script")
     if cursor_tick_worker:
         lines.append(f"- cursor tick worker: `{cursor_tick_worker}`")
+    if cursor_loop_script:
+        lines.append(f"- cursor loop script: `{cursor_loop_script}`")
+        lines.append("")
+        lines.append("Next step — start the LoopX-owned Cursor loop:")
+        lines.append("```bash")
+        lines.append(
+            "loopx agent-start --agent-type cursor-cli --goal-id <goal_id> --agent-id <agent_id>"
+            " --project . --cursor-home $(pwd)/.cursor"
+        )
+        lines.append("```")
     counts = payload.get("summary", {}).get("status_counts") or {}
     if isinstance(counts, dict) and counts:
         count_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
