@@ -769,6 +769,8 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
                 "--scan-root",
                 str(project),
                 "--no-global-sync",
+                "--reconciliation-mode",
+                "enforce",
                 "--execute",
             ]
         )
@@ -780,6 +782,9 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
     assert payload["receipt"]["next_phase"] is None
     assert payload["validation"]["status"] == "passed"
     assert payload["validation"]["validator_kind"] == "command"
+    assert payload["reconciliation_mode"] == "enforce"
+    assert payload["enforced_reconciliation_receipt"]["status"] == "applied"
+    assert payload["shadow_reconciliation_receipt"] is None
     assert payload["resume_turn_key"].startswith("sha256:")
     assert payload["scheduler"] == {
         "schema_version": "scheduler_execution_phase_v0",
@@ -799,15 +804,13 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
         "scheduler_acknowledged": False,
     }
     state_path = (
-        project
-        / ".codex"
-        / "goals"
-        / "loopx-turn-fixture"
-        / "ACTIVE_GOAL_STATE.md"
+        project / ".codex" / "goals" / "loopx-turn-fixture" / "ACTIVE_GOAL_STATE.md"
     )
     assert "Run the next public fixture check" in state_path.read_text(encoding="utf-8")
     index_path = runtime / "goals" / "loopx-turn-fixture" / "runs" / "index.jsonl"
-    rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()]
+    rows = [
+        json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()
+    ]
     assert [row["classification"] for row in rows] == [
         "fixture_progress",
         "quota_slot_spent",
@@ -840,6 +843,8 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
                 "--no-global-sync",
                 "--resume-turn-key",
                 payload["resume_turn_key"],
+                "--reconciliation-mode",
+                "enforce",
                 "--execute",
             ]
         )
@@ -854,8 +859,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
         "scheduler_acknowledged": False,
     }
     replayed_rows = [
-        json.loads(line)
-        for line in index_path.read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()
     ]
     assert [row["classification"] for row in replayed_rows] == [
         "fixture_progress",
@@ -950,11 +954,7 @@ json.load(sys.stdin)
 raise SystemExit(0 if pathlib.Path("claimed-artifact.txt").is_file() else 9)
 """
     state_path = (
-        project
-        / ".codex"
-        / "goals"
-        / "loopx-turn-fixture"
-        / "ACTIVE_GOAL_STATE.md"
+        project / ".codex" / "goals" / "loopx-turn-fixture" / "ACTIVE_GOAL_STATE.md"
     )
     before_state = state_path.read_text(encoding="utf-8")
     output = io.StringIO()
@@ -1013,7 +1013,9 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
 ) -> None:
     project, runtime, registry = _write_live_fixture(tmp_path)
 
-    def fake_codex_host(request: dict[str, object], **_kwargs: object) -> dict[str, object]:
+    def fake_codex_host(
+        request: dict[str, object], **_kwargs: object
+    ) -> dict[str, object]:
         return {
             "schema_version": "loopx_turn_result_v0",
             "turn_key": request["turn_key"],
@@ -1070,11 +1072,7 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert payload["effects"]["state_written"] is True
     assert payload["effects"]["quota_spent"] is True
     state = (
-        project
-        / ".codex"
-        / "goals"
-        / "loopx-turn-fixture"
-        / "ACTIVE_GOAL_STATE.md"
+        project / ".codex" / "goals" / "loopx-turn-fixture" / "ACTIVE_GOAL_STATE.md"
     ).read_text(encoding="utf-8")
     assert "Run one revised public fixture check" in state
     if result_kind != "validated_progress":

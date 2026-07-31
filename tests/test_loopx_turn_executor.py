@@ -57,7 +57,11 @@ def _plan() -> dict[str, object]:
                     "text": "Advance one public fixture",
                 },
             },
-            "user": {"action_required": False, "open_count": 0, "notify": "DONT_NOTIFY"},
+            "user": {
+                "action_required": False,
+                "open_count": 0,
+                "notify": "DONT_NOTIFY",
+            },
             "writeback": {"spend_after_validation": True},
             "scheduler": {"action": "run_now"},
             "action_signature": {
@@ -72,7 +76,9 @@ def _plan() -> dict[str, object]:
     )
 
 
-def _host_result(plan: dict[str, object], *, kind: str = "validated_progress") -> dict[str, object]:
+def _host_result(
+    plan: dict[str, object], *, kind: str = "validated_progress"
+) -> dict[str, object]:
     transaction = plan["transaction"]
     assert isinstance(transaction, dict)
     result: dict[str, object] = {
@@ -207,11 +213,7 @@ def test_result_and_reconciliation_records_have_stable_content_identity() -> Non
     extended_receipt = dict(receipt)
     extended_receipt["future_field"] = "not in v0"
     extended_receipt["receipt_id"] = _content_hash(
-        {
-            key: value
-            for key, value in extended_receipt.items()
-            if key != "receipt_id"
-        }
+        {key: value for key, value in extended_receipt.items() if key != "receipt_id"}
     )
     assert validate_turn_reconciliation_receipt(extended_receipt)["ok"] is False
 
@@ -297,9 +299,7 @@ def test_result_ledger_recovers_one_torn_trailing_row(tmp_path: Path) -> None:
 def test_shadow_reconciliation_compares_direct_effect_sequence() -> None:
     plan = _plan()
     record = build_turn_result_record(plan, _host_result(plan))
-    proposed_kinds = [
-        str(effect["kind"]) for effect in record["proposed_effects"]
-    ]
+    proposed_kinds = [str(effect["kind"]) for effect in record["proposed_effects"]]
 
     matched = build_turn_shadow_reconciliation_receipt(
         record,
@@ -369,7 +369,9 @@ def test_run_once_rejects_oversized_built_in_host_result(tmp_path: Path) -> None
     assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
 
 
-def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(tmp_path: Path) -> None:
+def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
+    tmp_path: Path,
+) -> None:
     plan = _plan()
     calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
     writeback, spend, scheduler = _callbacks(calls)
@@ -465,7 +467,9 @@ def test_run_once_rebuilds_derived_records_when_failed_validation_reinvokes_host
     assert calls == {"host": 2, "writeback": 1, "spend": 1, "scheduler": 1}
 
 
-def test_run_once_commits_once_and_replays_without_duplicate_effects(tmp_path: Path) -> None:
+def test_run_once_commits_once_and_replays_without_duplicate_effects(
+    tmp_path: Path,
+) -> None:
     plan = _plan()
     result_path = tmp_path / "result.json"
     result_path.write_text(json.dumps(_host_result(plan)), encoding="utf-8")
@@ -500,19 +504,16 @@ def test_run_once_commits_once_and_replays_without_duplicate_effects(tmp_path: P
     assert first["reconciliation_receipt"] == replay["reconciliation_receipt"]
     assert first["reconciliation_receipt"]["status"] == "not_attempted"
     assert first["shadow_reconciliation_receipt"]["status"] == "shadow_match"
-    assert replay["shadow_reconciliation_receipt"] == (
-        first["shadow_reconciliation_receipt"]
+    assert (
+        replay["shadow_reconciliation_receipt"]
+        == (first["shadow_reconciliation_receipt"])
     )
     assert first["result_ledger"]["status"] == "appended"
     assert first["result_ledger"]["appended_count"] == 1
     assert first["result_ledger"]["row_count"] == 3
     assert replay["result_ledger"]["status"] == "appended"
     ledger_path = (
-        tmp_path
-        / "runtime"
-        / "goals"
-        / "fixture-goal"
-        / "turn-result-ledger.jsonl"
+        tmp_path / "runtime" / "goals" / "fixture-goal" / "turn-result-ledger.jsonl"
     )
     assert read_turn_result_ledger(ledger_path) == [
         first["result_record"],
@@ -521,6 +522,142 @@ def test_run_once_commits_once_and_replays_without_duplicate_effects(tmp_path: P
     ]
     assert count_path.read_text(encoding="utf-8") == "1"
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_run_once_enforces_matching_revision_and_records_applied_receipt(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    payload = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: _host_result(plan),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback,
+        spend=spend,
+        scheduler=scheduler,
+        reconciliation_mode="enforce",
+        observe_revision=lambda: "sha256:fixture",
+    )
+
+    assert payload["status"] == "committed"
+    assert payload["reconciliation_mode"] == "enforce"
+    assert payload["shadow_reconciliation_receipt"] is None
+    assert payload["enforced_reconciliation_receipt"]["status"] == "applied"
+    assert payload["enforced_reconciliation_receipt"]["observed_revision"] == (
+        "sha256:fixture"
+    )
+    assert payload["enforced_reconciliation_receipt"]["applied_effect_ids"] == [
+        effect["effect_id"] for effect in payload["result_record"]["proposed_effects"]
+    ]
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_run_once_enforcement_blocks_stale_revision_and_shadow_rolls_back(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    common = {
+        "host_runner": lambda _request: _host_result(plan),
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+    }
+
+    blocked = run_loopx_turn_once(
+        plan,
+        reconciliation_mode="enforce",
+        observe_revision=lambda: "sha256:stale",
+        **common,
+    )
+    replayed = run_loopx_turn_once(
+        plan,
+        reconciliation_mode="enforce",
+        observe_revision=lambda: "sha256:fixture",
+        **common,
+    )
+
+    assert blocked["status"] == "reconciliation_blocked"
+    assert blocked["enforced_reconciliation_receipt"]["status"] == ("revision_conflict")
+    assert blocked["enforced_reconciliation_receipt"]["applied_effect_ids"] == []
+    assert replayed["replayed"] is True
+    assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
+
+    rolled_back = run_loopx_turn_once(
+        plan,
+        reconciliation_mode="shadow",
+        **common,
+    )
+
+    assert rolled_back["status"] == "committed"
+    assert rolled_back["reconciliation_mode"] == "shadow"
+    assert rolled_back["shadow_reconciliation_receipt"]["status"] == "shadow_match"
+    assert rolled_back["enforced_reconciliation_receipt"]["status"] == (
+        "revision_conflict"
+    )
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_run_once_enforcement_resume_reuses_checked_revision(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {
+        "revision": 0,
+        "writeback": 0,
+        "spend": 0,
+        "scheduler": 0,
+    }
+    writeback, healthy_spend, scheduler = _callbacks(calls)
+
+    def observe_revision() -> str:
+        calls["revision"] += 1
+        return "sha256:fixture"
+
+    def interrupted_spend() -> dict[str, object]:
+        raise SystemExit(8)
+
+    common = {
+        "host_runner": lambda _request: _host_result(plan),
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "scheduler": scheduler,
+        "reconciliation_mode": "enforce",
+        "observe_revision": observe_revision,
+    }
+    with pytest.raises(SystemExit):
+        run_loopx_turn_once(plan, spend=interrupted_spend, **common)
+
+    recovered = run_loopx_turn_once(plan, spend=healthy_spend, **common)
+
+    assert recovered["status"] == "committed"
+    assert recovered["enforced_reconciliation_receipt"]["status"] == "applied"
+    assert calls == {
+        "revision": 1,
+        "writeback": 1,
+        "spend": 1,
+        "scheduler": 1,
+    }
 
 
 def test_concurrent_same_turn_calls_share_one_result_and_effect_sequence(
@@ -583,12 +720,9 @@ def test_concurrent_same_turn_calls_share_one_result_and_effect_sequence(
     assert sorted(result["replayed"] for result in results) == [False, True]
     assert {result["status"] for result in results} == {"committed"}
     assert len({result["result_record"]["record_id"] for result in results}) == 1
-    assert len(
-        {
-            result["reconciliation_receipt"]["receipt_id"]
-            for result in results
-        }
-    ) == 1
+    assert (
+        len({result["reconciliation_receipt"]["receipt_id"] for result in results}) == 1
+    )
     assert counters == {"host": 1, "writeback": 1, "spend": 1, "scheduler": 1}
 
 
@@ -711,7 +845,9 @@ def test_run_once_recovers_after_process_exit_before_writeback(tmp_path: Path) -
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
 
 
-def test_run_once_resumes_after_writeback_without_duplicate_effects(tmp_path: Path) -> None:
+def test_run_once_resumes_after_writeback_without_duplicate_effects(
+    tmp_path: Path,
+) -> None:
     plan = _plan()
     result_path = tmp_path / "result.json"
     result_path.write_text(json.dumps(_host_result(plan)), encoding="utf-8")
@@ -872,7 +1008,9 @@ def test_material_result_cannot_use_not_required_validation_receipt(
 def test_run_once_stops_without_writeback_or_spend(tmp_path: Path) -> None:
     plan = _plan()
     result_path = tmp_path / "result.json"
-    result_path.write_text(json.dumps(_host_result(plan, kind="wait")), encoding="utf-8")
+    result_path.write_text(
+        json.dumps(_host_result(plan, kind="wait")), encoding="utf-8"
+    )
     calls = {"writeback": 0, "spend": 0, "scheduler": 0}
     writeback, spend, scheduler = _callbacks(calls)
 
@@ -904,7 +1042,11 @@ def test_run_once_projects_scheduler_action_without_false_ack(tmp_path: Path) ->
 
     def scheduler(_spend: dict[str, object]) -> dict[str, object]:
         calls["scheduler"] += 1
-        return {"completed": False, "apply_needed": True, "disposition": "host_action_required"}
+        return {
+            "completed": False,
+            "apply_needed": True,
+            "disposition": "host_action_required",
+        }
 
     payload = run_loopx_turn_once(
         plan,
@@ -977,11 +1119,7 @@ def test_run_once_resumes_scheduler_without_repeating_committed_effects(
     assert resumed["status"] == "committed"
     assert resumed["shadow_reconciliation_receipt"]["status"] == "shadow_match"
     ledger_path = (
-        tmp_path
-        / "runtime"
-        / "goals"
-        / "fixture-goal"
-        / "turn-result-ledger.jsonl"
+        tmp_path / "runtime" / "goals" / "fixture-goal" / "turn-result-ledger.jsonl"
     )
     assert len(read_turn_result_ledger(ledger_path)) == 4
     assert resumed["effects"]["scheduler_acknowledged"] is True
