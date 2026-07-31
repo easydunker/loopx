@@ -23,6 +23,29 @@ TURN_RECONCILIATION_STATUSES = {
     "semantic_review_required",
     "rejected",
 }
+TURN_RESULT_RECORD_FIELDS = {
+    "schema_version",
+    "record_id",
+    "turn_key",
+    "lineage",
+    "based_on_revision",
+    "action_signature",
+    "result_kind",
+    "candidate_result",
+    "proposed_effects",
+}
+TURN_RECONCILIATION_RECEIPT_FIELDS = {
+    "schema_version",
+    "receipt_id",
+    "result_record_id",
+    "turn_key",
+    "expected_revision",
+    "observed_revision",
+    "status",
+    "proposed_effect_ids",
+    "applied_effect_ids",
+    "reason",
+}
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -201,6 +224,9 @@ def validate_turn_result_record(value: Mapping[str, Any]) -> dict[str, Any]:
 
     record = dict(value)
     errors: list[str] = []
+    unknown = sorted(set(record) - TURN_RESULT_RECORD_FIELDS)
+    if unknown:
+        errors.append("unsupported Turn result record fields: " + ", ".join(unknown))
     if record.get("schema_version") != TURN_RESULT_RECORD_SCHEMA_VERSION:
         errors.append("unsupported Turn result record schema")
     record_id = str(record.pop("record_id", "") or "")
@@ -320,6 +346,49 @@ def build_turn_reconciliation_receipt(
     }
 
 
+def build_turn_shadow_reconciliation_receipt(
+    result_record: Mapping[str, Any],
+    *,
+    observed_effect_kinds: Sequence[str],
+    observed_revision: str | None = None,
+) -> dict[str, Any]:
+    """Compare the direct writeback phase sequence with proposed effects."""
+
+    validation = validate_turn_result_record(result_record)
+    if not validation["ok"]:
+        raise ValueError("; ".join(validation["errors"]))
+    proposed_effects = [
+        _mapping(item) for item in result_record.get("proposed_effects") or []
+    ]
+    proposed_kinds = [str(item.get("kind") or "") for item in proposed_effects]
+    observed_kinds = [str(item) for item in observed_effect_kinds]
+    if len(set(proposed_kinds)) != len(proposed_kinds):
+        raise ValueError("shadow reconciliation requires unique proposed effect kinds")
+    if (
+        not all(observed_kinds)
+        or len(set(observed_kinds)) != len(observed_kinds)
+        or not set(observed_kinds).issubset(proposed_kinds)
+    ):
+        raise ValueError(
+            "shadow reconciliation observed effects must be unique proposed kinds"
+        )
+    effect_id_by_kind = {
+        str(effect["kind"]): str(effect["effect_id"]) for effect in proposed_effects
+    }
+    matched = observed_kinds == proposed_kinds
+    return build_turn_reconciliation_receipt(
+        result_record,
+        status="shadow_match" if matched else "shadow_conflict",
+        observed_revision=observed_revision,
+        applied_effect_ids=[effect_id_by_kind[kind] for kind in observed_kinds],
+        reason=(
+            "direct_writeback_effect_sequence_matches"
+            if matched
+            else "direct_writeback_effect_sequence_differs"
+        ),
+    )
+
+
 def validate_turn_reconciliation_receipt(
     value: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -327,6 +396,11 @@ def validate_turn_reconciliation_receipt(
 
     receipt = dict(value)
     errors: list[str] = []
+    unknown = sorted(set(receipt) - TURN_RECONCILIATION_RECEIPT_FIELDS)
+    if unknown:
+        errors.append(
+            "unsupported Turn reconciliation receipt fields: " + ", ".join(unknown)
+        )
     if receipt.get("schema_version") != TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION:
         errors.append("unsupported Turn reconciliation receipt schema")
     if receipt.get("status") not in TURN_RECONCILIATION_STATUSES:
