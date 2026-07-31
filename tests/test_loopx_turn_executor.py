@@ -333,6 +333,7 @@ def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None
         timeout_seconds=5,
         execute=False,
         reconciliation_mode="enforce",
+        observe_revision=lambda: "sha256:fixture",
     )
 
     assert payload["ok"] is True
@@ -404,6 +405,69 @@ def test_run_once_rejects_nonserializable_built_in_host_result(tmp_path: Path) -
     assert payload["ok"] is False
     assert payload["reason"] == "built-in host result is not JSON-serializable"
     assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
+
+
+def test_run_once_rejects_deeply_nested_built_in_host_result(tmp_path: Path) -> None:
+    plan = _plan()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    nested: dict[str, object] = {}
+    cursor = nested
+    for _ in range(sys.getrecursionlimit() + 10):
+        child: dict[str, object] = {}
+        cursor["nested"] = child
+        cursor = child
+    nonserializable = _host_result(plan)
+    nonserializable["unexpected"] = nested
+
+    payload = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: nonserializable,
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        writeback=writeback,
+        spend=spend,
+        scheduler=scheduler,
+    )
+
+    assert payload["ok"] is False
+    assert payload["reason"] == "built-in host result is not JSON-serializable"
+    assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
+
+
+def test_enforce_mode_requires_revision_observer_before_host(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: dict[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    with pytest.raises(
+        ValueError,
+        match="enforce reconciliation mode requires observe_revision",
+    ):
+        run_loopx_turn_once(
+            plan,
+            host_runner=host,
+            project=tmp_path,
+            runtime_root=tmp_path / "runtime",
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            reconciliation_mode="enforce",
+        )
+
+    assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
 
 def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
