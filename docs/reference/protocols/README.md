@@ -6,6 +6,7 @@ integration. Keep these docs implementation-oriented and smoke-testable.
 Current contracts:
 
 - [Action packet decision v0](protocol-action-packet-decision-v0.md)
+- [Turn result and reconciliation v0](turn-result-reconciliation-v0.md)
 - [Decision Scope v0](decision-scope-v0.md)
 - [Host integration surface v0](host-integration-surface-v0.md)
 - [computer_use_runtime_connector_v0](computer-use-runtime-connector-v0.md)
