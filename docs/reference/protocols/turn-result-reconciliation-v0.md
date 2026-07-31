@@ -25,11 +25,12 @@ effect, resumes only from its journaled checked revision, and appends an
 `applied` receipt after the complete effect sequence. The callbacks remain the
 canonical effect providers; semantic review remains a later stage.
 
-All Turn closeout paths share one goal-scoped reconciliation lock. This keeps
-the revision observation and effect sequence atomic relative to other Turns
-for the same goal: a competing enforced Turn observes the first Turn's state
-change and fails with `revision_conflict` instead of applying from the same
-stale revision.
+Enforce-mode closeout paths share one goal-scoped reconciliation lock. This
+keeps the revision observation and effect sequence atomic relative to other
+enforced Turns for the same goal: a competing enforced Turn observes the first
+Turn's state change and fails with `revision_conflict` instead of applying from
+the same stale revision. Shadow-mode closeout retains its prior per-Turn
+journal isolation, so distinct shadow Turns can close out concurrently.
 
 Use `--reconciliation-mode enforce` to opt in. If a Turn stops with
 `reconciliation_blocked`, rerun that exact Turn with
