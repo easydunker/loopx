@@ -24,6 +24,14 @@ from .executor import (
     run_loopx_turn_once,
     validate_loopx_turn_host_result,
 )
+from .result_records import (
+    TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,
+    TURN_RESULT_RECORD_SCHEMA_VERSION,
+    build_turn_reconciliation_receipt,
+    build_turn_result_record,
+    validate_turn_reconciliation_receipt,
+    validate_turn_result_record,
+)
 from .transaction import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
     LoopXTurnResultKind,
@@ -41,12 +49,16 @@ __all__ = [
     "LOOPX_TURN_EXECUTION_SCHEMA_VERSION",
     "LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION",
     "LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION",
+    "TURN_RESULT_RECORD_SCHEMA_VERSION",
+    "TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION",
     "LoopXTurnRoute",
     "LoopXTurnResultKind",
     "build_loopx_turn_plan",
     "build_loopx_turn_host_request",
     "build_loopx_turn_command_validator",
     "build_loopx_turn_transaction_plan",
+    "build_turn_result_record",
+    "build_turn_reconciliation_receipt",
     "loopx_turn_execution_committed",
     "loopx_turn_execution_has_durable_effects",
     "loopx_turn_execution_recovery_required",
@@ -60,4 +72,6 @@ __all__ = [
     "codex_cli_session_binding",
     "validate_loopx_turn_host_result",
     "validate_loopx_turn_receipt",
+    "validate_turn_result_record",
+    "validate_turn_reconciliation_receipt",
 ]

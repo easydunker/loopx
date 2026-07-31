@@ -16,6 +16,12 @@ from ...file_lock import exclusive_file_lock
 from ..goals.goal_vision import normalize_goal_vision_packet
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
 from ..work_items.delivery_outcome import require_delivery_outcome
+from .result_records import (
+    build_turn_reconciliation_receipt,
+    build_turn_result_record,
+    validate_turn_reconciliation_receipt,
+    validate_turn_result_record,
+)
 from .transaction import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
     TRANSACTION_PHASES,
@@ -692,6 +698,31 @@ def _execution_payload(
     transaction = plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     turn_key = str(transaction.get("turn_key") or "")
     planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
+    result_record = (
+        dict(journal["result_record"])
+        if isinstance(journal.get("result_record"), dict)
+        else None
+    )
+    reconciliation_receipt = (
+        dict(journal["reconciliation_receipt"])
+        if isinstance(journal.get("reconciliation_receipt"), dict)
+        else None
+    )
+    if result_record is not None and not validate_turn_result_record(result_record)["ok"]:
+        raise ValueError("LoopX Turn journal result record failed identity validation")
+    if reconciliation_receipt is not None:
+        if not validate_turn_reconciliation_receipt(reconciliation_receipt)["ok"]:
+            raise ValueError(
+                "LoopX Turn journal reconciliation receipt failed identity validation"
+            )
+        if (
+            result_record is None
+            or reconciliation_receipt.get("result_record_id")
+            != result_record.get("record_id")
+        ):
+            raise ValueError(
+                "LoopX Turn journal reconciliation receipt has mismatched lineage"
+            )
     quota_spent = effects.get("quota_spent") is True or "quota_spend" in list(
         journal.get("completed_phases") or []
     )
@@ -714,6 +745,8 @@ def _execution_payload(
         "result_kind": journal.get("result_kind"),
         "validation": journal.get("task_validation"),
         "receipt": journal.get("receipt"),
+        "result_record": result_record,
+        "reconciliation_receipt": reconciliation_receipt,
         "scheduler": journal.get("scheduler"),
         "effects": dict(effects),
         "quota_slot_spend_count": 1 if quota_spent else 0,
@@ -816,8 +849,49 @@ def _host_result_stage(
     normalized = dict(validation["result"])
     if len(completed_phases) < 2:
         completed_phases = list(TRANSACTION_PHASES[:2])
+    expected_result_record = build_turn_result_record(plan, normalized)
+    result_record = (
+        dict(journal["result_record"])
+        if isinstance(journal.get("result_record"), dict)
+        else expected_result_record
+    )
+    result_record_validation = validate_turn_result_record(result_record)
+    if (
+        not result_record_validation["ok"]
+        or result_record.get("record_id") != expected_result_record["record_id"]
+    ):
+        raise ValueError("LoopX Turn journal result record is not immutable")
+    expected_reconciliation_receipt = build_turn_reconciliation_receipt(
+        result_record,
+        status=(
+            "not_required"
+            if not result_record["proposed_effects"]
+            else "not_attempted"
+        ),
+        reason=(
+            "typed_stop_has_no_proposed_effects"
+            if not result_record["proposed_effects"]
+            else "legacy_direct_writeback_not_reconciled"
+        ),
+    )
+    reconciliation_receipt = (
+        dict(journal["reconciliation_receipt"])
+        if isinstance(journal.get("reconciliation_receipt"), dict)
+        else expected_reconciliation_receipt
+    )
+    reconciliation_validation = validate_turn_reconciliation_receipt(
+        reconciliation_receipt
+    )
+    if (
+        not reconciliation_validation["ok"]
+        or reconciliation_receipt.get("receipt_id")
+        != expected_reconciliation_receipt["receipt_id"]
+    ):
+        raise ValueError("LoopX Turn journal reconciliation receipt is not immutable")
     journal.update(
         host_result=normalized,
+        result_record=result_record,
+        reconciliation_receipt=reconciliation_receipt,
         result_kind=normalized.get("result_kind"),
         completed_phases=completed_phases,
     )
