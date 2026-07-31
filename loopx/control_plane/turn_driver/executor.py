@@ -19,8 +19,13 @@ from ..work_items.delivery_outcome import require_delivery_outcome
 from .result_records import (
     build_turn_reconciliation_receipt,
     build_turn_result_record,
+    build_turn_shadow_reconciliation_receipt,
     validate_turn_reconciliation_receipt,
     validate_turn_result_record,
+)
+from .result_ledger import (
+    append_turn_result_ledger_records,
+    turn_result_ledger_path,
 )
 from .transaction import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
@@ -708,6 +713,11 @@ def _execution_payload(
         if isinstance(journal.get("reconciliation_receipt"), dict)
         else None
     )
+    shadow_reconciliation_receipt = (
+        dict(journal["shadow_reconciliation_receipt"])
+        if isinstance(journal.get("shadow_reconciliation_receipt"), dict)
+        else None
+    )
     if result_record is not None and not validate_turn_result_record(result_record)["ok"]:
         raise ValueError("LoopX Turn journal result record failed identity validation")
     host_result = (
@@ -742,6 +752,33 @@ def _execution_payload(
             raise ValueError(
                 "LoopX Turn journal reconciliation receipt has mismatched lineage"
             )
+    if shadow_reconciliation_receipt is not None:
+        if not validate_turn_reconciliation_receipt(
+            shadow_reconciliation_receipt
+        )["ok"]:
+            raise ValueError(
+                "LoopX Turn journal shadow reconciliation receipt failed identity "
+                "validation"
+            )
+        if (
+            result_record is None
+            or shadow_reconciliation_receipt.get("result_record_id")
+            != result_record.get("record_id")
+            or shadow_reconciliation_receipt.get("turn_key")
+            != result_record.get("turn_key")
+            or shadow_reconciliation_receipt.get("expected_revision")
+            != result_record.get("based_on_revision")
+            or shadow_reconciliation_receipt.get("proposed_effect_ids")
+            != [
+                str(item.get("effect_id") or "")
+                for item in result_record.get("proposed_effects") or []
+                if isinstance(item, dict)
+            ]
+        ):
+            raise ValueError(
+                "LoopX Turn journal shadow reconciliation receipt has mismatched "
+                "lineage"
+            )
     quota_spent = effects.get("quota_spent") is True or "quota_spend" in list(
         journal.get("completed_phases") or []
     )
@@ -766,6 +803,14 @@ def _execution_payload(
         "receipt": journal.get("receipt"),
         "result_record": result_record,
         "reconciliation_receipt": reconciliation_receipt,
+        "shadow_reconciliation_receipt": (
+            shadow_reconciliation_receipt
+        ),
+        "result_ledger": (
+            dict(journal["result_ledger"])
+            if isinstance(journal.get("result_ledger"), dict)
+            else None
+        ),
         "scheduler": journal.get("scheduler"),
         "effects": dict(effects),
         "quota_slot_spend_count": 1 if quota_spent else 0,
@@ -783,6 +828,7 @@ def _host_result_stage(
     timeout_seconds: float,
     journal: dict[str, Any],
     journal_path: Path,
+    result_ledger_path: Path,
     effects: dict[str, bool],
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
@@ -907,10 +953,15 @@ def _host_result_stage(
         != expected_reconciliation_receipt["receipt_id"]
     ):
         raise ValueError("LoopX Turn journal reconciliation receipt is not immutable")
+    result_ledger = append_turn_result_ledger_records(
+        result_ledger_path,
+        [result_record, reconciliation_receipt],
+    )
     journal.update(
         host_result=normalized,
         result_record=result_record,
         reconciliation_receipt=reconciliation_receipt,
+        result_ledger=result_ledger,
         result_kind=normalized.get("result_kind"),
         completed_phases=completed_phases,
     )
@@ -1007,6 +1058,46 @@ def _task_validation_stage(
     return completed_phases, None
 
 
+def _record_shadow_reconciliation(
+    journal: dict[str, Any],
+    *,
+    result_ledger_path: Path,
+    completed_phases: Sequence[str],
+    scheduler_completed: bool,
+) -> None:
+    result_record = (
+        dict(journal["result_record"])
+        if isinstance(journal.get("result_record"), dict)
+        else None
+    )
+    if result_record is None or not result_record.get("proposed_effects"):
+        return
+    completed = set(completed_phases)
+    observed_effect_kinds: list[str] = []
+    for raw_effect in result_record["proposed_effects"]:
+        effect = dict(raw_effect) if isinstance(raw_effect, Mapping) else {}
+        kind = str(effect.get("kind") or "")
+        if kind == "quota_spend":
+            observed = "quota_spend" in completed
+        elif kind == "scheduler_reconcile":
+            observed = scheduler_completed
+        else:
+            observed = "durable_writeback" in completed
+        if observed:
+            observed_effect_kinds.append(kind)
+    receipt = build_turn_shadow_reconciliation_receipt(
+        result_record,
+        observed_effect_kinds=observed_effect_kinds,
+    )
+    journal.update(
+        shadow_reconciliation_receipt=receipt,
+        result_ledger=append_turn_result_ledger_records(
+            result_ledger_path,
+            [receipt],
+        ),
+    )
+
+
 def _transaction_closeout_stage(
     plan: Mapping[str, Any],
     result: dict[str, Any],
@@ -1014,6 +1105,7 @@ def _transaction_closeout_stage(
     completed_phases: list[str],
     journal: dict[str, Any],
     journal_path: Path,
+    result_ledger_path: Path,
     effects: dict[str, bool],
     writeback: Writeback,
     spend: Spend,
@@ -1037,6 +1129,12 @@ def _transaction_closeout_stage(
                 status="failed",
                 reason=failure["reason"],
                 receipt=failure["receipt"],
+            )
+            _record_shadow_reconciliation(
+                journal,
+                result_ledger_path=result_ledger_path,
+                completed_phases=completed_phases,
+                scheduler_completed=False,
             )
             _write_journal(journal_path, journal)
             return _execution_payload(
@@ -1069,6 +1167,12 @@ def _transaction_closeout_stage(
                 reason=failure["reason"],
                 receipt=failure["receipt"],
             )
+            _record_shadow_reconciliation(
+                journal,
+                result_ledger_path=result_ledger_path,
+                completed_phases=completed_phases,
+                scheduler_completed=False,
+            )
             _write_journal(journal_path, journal)
             return _execution_payload(
                 plan,
@@ -1098,6 +1202,12 @@ def _transaction_closeout_stage(
             status="scheduler_action_required",
             receipt=_receipt(plan, result, completed_phases=completed_phases),
         )
+        _record_shadow_reconciliation(
+            journal,
+            result_ledger_path=result_ledger_path,
+            completed_phases=completed_phases,
+            scheduler_completed=False,
+        )
         _write_journal(journal_path, journal)
         return _execution_payload(
             plan,
@@ -1113,6 +1223,12 @@ def _transaction_closeout_stage(
         status="committed",
         completed_phases=completed_phases,
         receipt=_receipt(plan, result, completed_phases=completed_phases),
+    )
+    _record_shadow_reconciliation(
+        journal,
+        result_ledger_path=result_ledger_path,
+        completed_phases=completed_phases,
+        scheduler_completed=True,
     )
     _write_journal(journal_path, journal)
     return _execution_payload(
@@ -1180,6 +1296,7 @@ def run_loopx_turn_once(
 
     turn_key = str(request["turn_key"])
     journal_path = turn_journal_path(runtime_root, goal_id=goal_id, turn_key=turn_key)
+    ledger_path = turn_result_ledger_path(runtime_root, goal_id=goal_id)
     with exclusive_file_lock(journal_path):
         journal = _load_journal(journal_path)
         if journal and (
@@ -1234,6 +1351,7 @@ def run_loopx_turn_once(
             timeout_seconds=timeout_seconds,
             journal=journal,
             journal_path=journal_path,
+            result_ledger_path=ledger_path,
             effects=effects,
         )
         if terminal is not None:
@@ -1258,6 +1376,7 @@ def run_loopx_turn_once(
             completed_phases=completed_phases,
             journal=journal,
             journal_path=journal_path,
+            result_ledger_path=ledger_path,
             effects=effects,
             writeback=writeback,
             spend=spend,
