@@ -711,7 +711,7 @@ def _run_host_runner(
         encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
             "utf-8"
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return {
             "ok": False,
             "reason": "built-in host result is not JSON-serializable",
@@ -1450,6 +1450,8 @@ def run_loopx_turn_once(
 ) -> dict[str, Any]:
     if reconciliation_mode not in TURN_RECONCILIATION_MODES:
         raise ValueError("unsupported Turn reconciliation mode")
+    if reconciliation_mode == "enforce" and observe_revision is None:
+        raise ValueError("enforce reconciliation mode requires observe_revision")
     if host_runner is not None and host_argv is not None:
         raise ValueError("run-once accepts either host_argv or host_runner, not both")
     if host_runner is None:
