@@ -12,11 +12,15 @@ import pytest
 from loopx.control_plane.turn_driver import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
     TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,
+    TURN_RESULT_LEDGER_APPEND_SCHEMA_VERSION,
     TURN_RESULT_RECORD_SCHEMA_VERSION,
+    append_turn_result_ledger_records,
     build_loopx_turn_plan,
     build_turn_reconciliation_receipt,
     build_turn_result_record,
+    build_turn_shadow_reconciliation_receipt,
     load_loopx_turn_plan_from_journal,
+    read_turn_result_ledger,
     run_loopx_turn_once,
     validate_loopx_turn_host_result,
     validate_turn_reconciliation_receipt,
@@ -193,6 +197,24 @@ def test_result_and_reconciliation_records_have_stable_content_identity() -> Non
     )
     assert validate_turn_reconciliation_receipt(invalid_receipt)["ok"] is False
 
+    extended_record = dict(record)
+    extended_record["future_field"] = "not in v0"
+    extended_record["record_id"] = _content_hash(
+        {key: value for key, value in extended_record.items() if key != "record_id"}
+    )
+    assert validate_turn_result_record(extended_record)["ok"] is False
+
+    extended_receipt = dict(receipt)
+    extended_receipt["future_field"] = "not in v0"
+    extended_receipt["receipt_id"] = _content_hash(
+        {
+            key: value
+            for key, value in extended_receipt.items()
+            if key != "receipt_id"
+        }
+    )
+    assert validate_turn_reconciliation_receipt(extended_receipt)["ok"] is False
+
     effect_id = record["proposed_effects"][0]["effect_id"]
     with pytest.raises(ValueError, match="applied_effect_ids must be unique"):
         build_turn_reconciliation_receipt(
@@ -200,6 +222,80 @@ def test_result_and_reconciliation_records_have_stable_content_identity() -> Non
             status="applied",
             applied_effect_ids=[effect_id, effect_id],
         )
+
+
+def test_result_ledger_appends_immutable_rows_once(tmp_path: Path) -> None:
+    plan = _plan()
+    record = build_turn_result_record(plan, _host_result(plan))
+    receipt = build_turn_reconciliation_receipt(
+        record,
+        status="not_attempted",
+        reason="legacy_direct_writeback_not_reconciled",
+    )
+    path = tmp_path / "turn-result-ledger.jsonl"
+
+    first = append_turn_result_ledger_records(path, [record, receipt])
+    replay = append_turn_result_ledger_records(path, [record, receipt])
+
+    assert first == {
+        "schema_version": TURN_RESULT_LEDGER_APPEND_SCHEMA_VERSION,
+        "status": "appended",
+        "appended_count": 2,
+        "reused_count": 0,
+        "row_count": 2,
+        "record_ids": [record["record_id"], receipt["receipt_id"]],
+        "path_recorded": False,
+    }
+    assert replay["status"] == "reused"
+    assert replay["appended_count"] == 0
+    assert replay["reused_count"] == 2
+    assert read_turn_result_ledger(path) == [record, receipt]
+
+
+def test_result_ledger_rejects_dangling_or_corrupt_rows(tmp_path: Path) -> None:
+    plan = _plan()
+    record = build_turn_result_record(plan, _host_result(plan))
+    receipt = build_turn_reconciliation_receipt(
+        record,
+        status="not_attempted",
+        reason="legacy_direct_writeback_not_reconciled",
+    )
+    path = tmp_path / "turn-result-ledger.jsonl"
+
+    with pytest.raises(ValueError, match="receipt has no result record"):
+        append_turn_result_ledger_records(path, [receipt])
+    assert not path.exists()
+
+    path.write_text("{not-json}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="row 1 is not valid JSON"):
+        append_turn_result_ledger_records(path, [record, receipt])
+    assert path.read_text(encoding="utf-8") == "{not-json}\n"
+
+
+def test_shadow_reconciliation_compares_direct_effect_sequence() -> None:
+    plan = _plan()
+    record = build_turn_result_record(plan, _host_result(plan))
+    proposed_kinds = [
+        str(effect["kind"]) for effect in record["proposed_effects"]
+    ]
+
+    matched = build_turn_shadow_reconciliation_receipt(
+        record,
+        observed_effect_kinds=proposed_kinds,
+    )
+    partial = build_turn_shadow_reconciliation_receipt(
+        record,
+        observed_effect_kinds=proposed_kinds[:1],
+    )
+
+    assert matched["status"] == "shadow_match"
+    assert matched["applied_effect_ids"] == matched["proposed_effect_ids"]
+    assert matched["reason"] == "direct_writeback_effect_sequence_matches"
+    assert validate_turn_reconciliation_receipt(matched)["ok"] is True
+    assert partial["status"] == "shadow_conflict"
+    assert partial["applied_effect_ids"] == matched["proposed_effect_ids"][:1]
+    assert partial["reason"] == "direct_writeback_effect_sequence_differs"
+    assert validate_turn_reconciliation_receipt(partial)["ok"] is True
 
 
 def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None:
@@ -381,6 +477,26 @@ def test_run_once_commits_once_and_replays_without_duplicate_effects(tmp_path: P
     assert first["result_record"] == replay["result_record"]
     assert first["reconciliation_receipt"] == replay["reconciliation_receipt"]
     assert first["reconciliation_receipt"]["status"] == "not_attempted"
+    assert first["shadow_reconciliation_receipt"]["status"] == "shadow_match"
+    assert replay["shadow_reconciliation_receipt"] == (
+        first["shadow_reconciliation_receipt"]
+    )
+    assert first["result_ledger"]["status"] == "appended"
+    assert first["result_ledger"]["appended_count"] == 1
+    assert first["result_ledger"]["row_count"] == 3
+    assert replay["result_ledger"]["status"] == "appended"
+    ledger_path = (
+        tmp_path
+        / "runtime"
+        / "goals"
+        / "fixture-goal"
+        / "turn-result-ledger.jsonl"
+    )
+    assert read_turn_result_ledger(ledger_path) == [
+        first["result_record"],
+        first["reconciliation_receipt"],
+        first["shadow_reconciliation_receipt"],
+    ]
     assert count_path.read_text(encoding="utf-8") == "1"
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
 
@@ -786,6 +902,13 @@ def test_run_once_projects_scheduler_action_without_false_ack(tmp_path: Path) ->
     assert payload["status"] == "scheduler_action_required"
     assert payload["receipt"]["next_phase"] == "scheduler_apply"
     assert payload["effects"]["scheduler_acknowledged"] is False
+    assert payload["shadow_reconciliation_receipt"]["status"] == "shadow_conflict"
+    assert [
+        effect["kind"]
+        for effect in payload["result_record"]["proposed_effects"]
+        if effect["effect_id"]
+        in payload["shadow_reconciliation_receipt"]["applied_effect_ids"]
+    ] == ["goal_state_refresh", "quota_spend"]
 
 
 def test_run_once_resumes_scheduler_without_repeating_committed_effects(
@@ -828,7 +951,17 @@ def test_run_once_resumes_scheduler_without_repeating_committed_effects(
     resumed = run_loopx_turn_once(plan, **kwargs)
 
     assert first["status"] == "scheduler_action_required"
+    assert first["shadow_reconciliation_receipt"]["status"] == "shadow_conflict"
     assert resumed["status"] == "committed"
+    assert resumed["shadow_reconciliation_receipt"]["status"] == "shadow_match"
+    ledger_path = (
+        tmp_path
+        / "runtime"
+        / "goals"
+        / "fixture-goal"
+        / "turn-result-ledger.jsonl"
+    )
+    assert len(read_turn_result_ledger(ledger_path)) == 4
     assert resumed["effects"]["scheduler_acknowledged"] is True
     assert count_path.read_text(encoding="utf-8") == "1"
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 2}
