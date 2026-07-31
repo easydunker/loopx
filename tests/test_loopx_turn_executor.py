@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from pathlib import Path
 from threading import Event, Lock
 
@@ -22,6 +23,16 @@ from loopx.control_plane.turn_driver import (
     validate_turn_result_record,
 )
 from loopx.control_plane.turn_driver.executor import BuiltInHostError
+
+
+def _content_hash(payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + sha256(encoded).hexdigest()
 
 
 def _plan() -> dict[str, object]:
@@ -174,6 +185,13 @@ def test_result_and_reconciliation_records_have_stable_content_identity() -> Non
     tampered = dict(record)
     tampered["result_kind"] = "wait"
     assert validate_turn_result_record(tampered)["ok"] is False
+
+    invalid_receipt = dict(receipt)
+    invalid_receipt["status"] = "applied"
+    invalid_receipt["receipt_id"] = _content_hash(
+        {key: value for key, value in invalid_receipt.items() if key != "receipt_id"}
+    )
+    assert validate_turn_reconciliation_receipt(invalid_receipt)["ok"] is False
 
 
 def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None:
@@ -395,6 +413,46 @@ def test_committed_replay_rejects_tampered_result_record(tmp_path: Path) -> None
     journal_path.write_text(json.dumps(journal), encoding="utf-8")
 
     with pytest.raises(ValueError, match="result record failed identity validation"):
+        run_loopx_turn_once(plan, **kwargs)
+
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_committed_replay_rejects_rehashed_result_record(tmp_path: Path) -> None:
+    plan = _plan()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    kwargs = {
+        "host_runner": lambda _request: _host_result(plan),
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+    }
+    committed = run_loopx_turn_once(plan, **kwargs)
+    assert committed["status"] == "committed"
+
+    journal_path = next(
+        (tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob("*.json")
+    )
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    altered_result = dict(journal["host_result"])
+    altered_result["classification"] = "altered_progress"
+    altered_record = build_turn_result_record(plan, altered_result)
+    journal["result_record"] = altered_record
+    journal["reconciliation_receipt"] = build_turn_reconciliation_receipt(
+        altered_record,
+        status="not_attempted",
+        reason="legacy_direct_writeback_not_reconciled",
+    )
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match host result"):
         run_loopx_turn_once(plan, **kwargs)
 
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
