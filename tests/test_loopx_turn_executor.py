@@ -193,6 +193,14 @@ def test_result_and_reconciliation_records_have_stable_content_identity() -> Non
     )
     assert validate_turn_reconciliation_receipt(invalid_receipt)["ok"] is False
 
+    effect_id = record["proposed_effects"][0]["effect_id"]
+    with pytest.raises(ValueError, match="applied_effect_ids must be unique"):
+        build_turn_reconciliation_receipt(
+            record,
+            status="applied",
+            applied_effect_ids=[effect_id, effect_id],
+        )
+
 
 def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None:
     plan = _plan()
@@ -276,6 +284,66 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(tmp_p
     assert failed["receipt"]["failed_phase"] == "host_execute"
     assert replayed["replayed"] is True
     assert recovered["status"] == "committed"
+    assert calls == {"host": 2, "writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_run_once_rebuilds_derived_records_when_failed_validation_reinvokes_host(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: dict[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        result = _host_result(plan)
+        if calls["host"] == 2:
+            result["classification"] = "retry_progress"
+        return result
+
+    def reject(
+        _plan: dict[str, object],
+        _result: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "status": "failed",
+            "validator_kind": "fixture",
+            "summary": "retry the host result contract",
+            "recovery_kind": "repair_required",
+        }
+
+    kwargs = {
+        "host_runner": host,
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+    }
+    failed = run_loopx_turn_once(plan, task_validator=reject, **kwargs)
+    assert failed["status"] == "failed"
+
+    journal_path = next(
+        (tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob("*.json")
+    )
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    journal["validation_stage"] = "host_result_contract"
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    recovered = run_loopx_turn_once(
+        plan,
+        task_validator=_passing_validator,
+        retry_failed=True,
+        **kwargs,
+    )
+
+    assert recovered["status"] == "committed"
+    assert recovered["result_record"]["candidate_result"]["classification"] == (
+        "retry_progress"
+    )
     assert calls == {"host": 2, "writeback": 1, "spend": 1, "scheduler": 1}
 
 
