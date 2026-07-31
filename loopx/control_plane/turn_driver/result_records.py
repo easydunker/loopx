@@ -206,13 +206,61 @@ def validate_turn_result_record(value: Mapping[str, Any]) -> dict[str, Any]:
     record_id = str(record.pop("record_id", "") or "")
     if not record_id or record_id != _canonical_hash(record):
         errors.append("Turn result record_id does not match its canonical content")
+    turn_key = str(value.get("turn_key") or "")
+    lineage = _mapping(value.get("lineage"))
+    signature = _mapping(value.get("action_signature"))
+    candidate = _mapping(value.get("candidate_result"))
+    result_kind_value = str(value.get("result_kind") or "")
+    try:
+        result_kind = LoopXTurnResultKind(result_kind_value)
+    except ValueError:
+        result_kind = None
+        errors.append("Turn result record has an unsupported result kind")
+    if (
+        not turn_key
+        or not all(
+            str(lineage.get(key) or "") for key in ("goal_id", "agent_id", "todo_id")
+        )
+        or not str(value.get("based_on_revision") or "")
+        or not str(signature.get("source_hash") or "")
+    ):
+        errors.append("Turn result record has incomplete lineage")
+    if (
+        candidate.get("schema_version") != LOOPX_TURN_RESULT_SCHEMA_VERSION
+        or candidate.get("turn_key") != turn_key
+        or candidate.get("result_kind") != result_kind_value
+    ):
+        errors.append("Turn result record candidate lineage is inconsistent")
     effects = value.get("proposed_effects")
     if not isinstance(effects, list):
         errors.append("Turn result proposed_effects must be a list")
-    elif len({str(_mapping(item).get("effect_id") or "") for item in effects}) != len(
-        effects
-    ):
-        errors.append("Turn result proposed effect ids must be unique")
+    else:
+        effect_ids = [str(_mapping(item).get("effect_id") or "") for item in effects]
+        if not all(effect_ids) or len(set(effect_ids)) != len(effects):
+            errors.append("Turn result proposed effect ids must be non-empty and unique")
+        for item in effects:
+            effect = _mapping(item)
+            effect_id = str(effect.pop("effect_id", "") or "")
+            if (
+                not effect_id
+                or not str(effect.get("kind") or "")
+                or not str(effect.get("target") or "")
+                or not isinstance(effect.get("payload"), Mapping)
+                or effect_id != _canonical_hash({"turn_key": turn_key, **effect})
+            ):
+                errors.append("Turn result proposed effect identity is invalid")
+                break
+        if result_kind is not None and not errors:
+            expected_effects = _proposed_effects(
+                turn_key=turn_key,
+                goal_id=str(lineage["goal_id"]),
+                agent_id=str(lineage["agent_id"]),
+                todo_id=str(lineage["todo_id"]),
+                result_kind=result_kind,
+                result=candidate,
+            )
+            if effects != expected_effects:
+                errors.append("Turn result proposed effects do not match the candidate")
     return {
         "ok": not errors,
         "schema_version": TURN_RESULT_RECORD_SCHEMA_VERSION,
@@ -244,6 +292,8 @@ def build_turn_reconciliation_receipt(
     applied = [str(item) for item in applied_effect_ids]
     if not set(applied).issubset(proposed_effect_ids):
         raise ValueError("reconciliation applied_effect_ids must reference proposed effects")
+    if status == "not_attempted" and not proposed_effect_ids:
+        raise ValueError("not_attempted reconciliation requires proposed effects")
     if status in {"applied", "already_applied"} and set(applied) != set(
         proposed_effect_ids
     ):
@@ -279,6 +329,11 @@ def validate_turn_reconciliation_receipt(
         errors.append("unsupported Turn reconciliation receipt schema")
     if receipt.get("status") not in TURN_RECONCILIATION_STATUSES:
         errors.append("unsupported Turn reconciliation status")
+    if not all(
+        str(receipt.get(key) or "")
+        for key in ("result_record_id", "turn_key", "expected_revision")
+    ):
+        errors.append("Turn reconciliation receipt has incomplete lineage")
     receipt_id = str(receipt.pop("receipt_id", "") or "")
     if not receipt_id or receipt_id != _canonical_hash(receipt):
         errors.append(
@@ -288,10 +343,26 @@ def validate_turn_reconciliation_receipt(
     applied = receipt.get("applied_effect_ids")
     if not isinstance(proposed, list) or not isinstance(applied, list):
         errors.append("Turn reconciliation effect ids must be lists")
-    elif not set(str(item) for item in applied).issubset(
-        str(item) for item in proposed
-    ):
-        errors.append("Turn reconciliation applied effects were not proposed")
+    else:
+        proposed_ids = [str(item) for item in proposed]
+        applied_ids = [str(item) for item in applied]
+        if (
+            not all(proposed_ids)
+            or len(set(proposed_ids)) != len(proposed_ids)
+            or len(set(applied_ids)) != len(applied_ids)
+        ):
+            errors.append("Turn reconciliation effect ids must be non-empty and unique")
+        if not set(applied_ids).issubset(proposed_ids):
+            errors.append("Turn reconciliation applied effects were not proposed")
+        status = receipt.get("status")
+        if status == "not_attempted" and not proposed_ids:
+            errors.append("not_attempted reconciliation requires proposed effects")
+        if status in {"applied", "already_applied"} and set(applied_ids) != set(
+            proposed_ids
+        ):
+            errors.append("applied reconciliation must cover every proposed effect")
+        if status == "not_required" and proposed_ids:
+            errors.append("not_required reconciliation cannot have proposed effects")
     return {
         "ok": not errors,
         "schema_version": TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,

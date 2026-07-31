@@ -710,15 +710,34 @@ def _execution_payload(
     )
     if result_record is not None and not validate_turn_result_record(result_record)["ok"]:
         raise ValueError("LoopX Turn journal result record failed identity validation")
+    host_result = (
+        dict(journal["host_result"])
+        if isinstance(journal.get("host_result"), dict)
+        else None
+    )
+    if result_record is not None and host_result is not None:
+        expected_result_record = build_turn_result_record(plan, host_result)
+        if result_record.get("record_id") != expected_result_record.get("record_id"):
+            raise ValueError("LoopX Turn journal result record does not match host result")
     if reconciliation_receipt is not None:
         if not validate_turn_reconciliation_receipt(reconciliation_receipt)["ok"]:
             raise ValueError(
                 "LoopX Turn journal reconciliation receipt failed identity validation"
             )
+        expected_effect_ids = [
+            str(item.get("effect_id") or "")
+            for item in (result_record or {}).get("proposed_effects") or []
+            if isinstance(item, dict)
+        ]
         if (
             result_record is None
             or reconciliation_receipt.get("result_record_id")
             != result_record.get("record_id")
+            or reconciliation_receipt.get("turn_key") != result_record.get("turn_key")
+            or reconciliation_receipt.get("expected_revision")
+            != result_record.get("based_on_revision")
+            or reconciliation_receipt.get("proposed_effect_ids")
+            != expected_effect_ids
         ):
             raise ValueError(
                 "LoopX Turn journal reconciliation receipt has mismatched lineage"
