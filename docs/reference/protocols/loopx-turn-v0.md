@@ -15,9 +15,10 @@ model execution, tools, and an opaque resumable session handle.
 The additive
 [Turn result and reconciliation v0](turn-result-reconciliation-v0.md)
 contract freezes each normalized host candidate and its proposed effects before
-later ledger or reconciliation stages. The current implementation records a
-deterministic result plus an explicit unreconciled receipt in the existing
-per-Turn journal without changing canonical writeback.
+later enforcement stages. The current implementation records the deterministic
+result and receipts in the per-Turn journal and a goal-scoped append-only
+runtime ledger, then shadows the existing direct writeback effect sequence
+without changing canonical authority.
 
 The protocol is host-neutral. A Codex CLI adapter is the first target, but the
 driver lifecycle must not depend on Codex-specific session files, transcript

@@ -16,11 +16,13 @@ host candidate
     -> canonical todo/state/quota/scheduler effects
 ```
 
-This version only writes the result record and a `not_attempted` or
-`not_required` receipt into the existing per-Turn journal. It does not add an
-append-only ledger, shadow comparison, revision check, semantic reviewer, or a
-new write path. The existing `loopx turn run-once` callbacks remain the
-canonical writeback path.
+This version writes the result record and a `not_attempted` or `not_required`
+receipt into both the existing per-Turn journal and a goal-scoped append-only
+runtime ledger. After the existing direct writeback path reaches a terminal
+observation, a mechanical shadow comparison appends a separate `shadow_match`
+or `shadow_conflict` receipt. It does not enforce that comparison, check the
+current revision, invoke a semantic reviewer, or add a new canonical write
+path. The existing `loopx turn run-once` callbacks remain authoritative.
 
 ## Why Two Records
 
@@ -186,28 +188,32 @@ ids.
 
 ## Current Behavior Characterization
 
-The existing per-Turn journal and exclusive sibling lock remain authoritative
-for recovery in this stage:
+The per-Turn journal and exclusive sibling lock remain authoritative for
+transaction recovery. The goal-scoped result ledger independently preserves
+validated result and reconciliation observations:
 
 | Scenario | Required observation |
 | --- | --- |
 | Same Turn called concurrently | One caller performs host, writeback, spend, and scheduler callbacks; the other replays the committed journal. |
 | Process exits after validation but before writeback | The normalized host result and immutable result record remain journaled; resume does not reinvoke the host. |
 | Process exits after writeback but before spend | Resume reuses the journaled writeback phase and does not repeat it. |
-| Committed Turn replay | The same result and reconciliation record ids are returned with zero new effects. |
+| Committed Turn replay | The same result and reconciliation record ids are returned with zero new effects or ledger rows. |
 | Task validation retry | The host candidate and result record remain stable while validation is retried. |
+| Direct path completes | Shadow reconciliation appends a `shadow_match` receipt covering the proposed effect sequence. |
+| Direct path stops partway | Shadow reconciliation appends a `shadow_conflict` receipt covering only the observed effect prefix. |
 
-The journal is still a mutable transaction checkpoint, not the future result
-ledger. It may update phase progress and failure state, but it must not mutate
-an existing `result_record` or `reconciliation_receipt`.
+The journal remains a mutable transaction checkpoint. The ledger validates
+every row before append, rejects dangling receipts and duplicate identities,
+and reuses byte-equivalent record ids on replay. A later shadow receipt never
+replaces the initial receipt or an earlier partial-path shadow observation.
 
 ## Promotion Sequence
 
 1. **Contract and characterization**: emit deterministic records in the
    existing journal and cover concurrency, crash recovery, replay, and
    tamper-detection behavior. Keep direct writeback unchanged.
-2. **Ledger and shadow**: append records and receipts to a dedicated immutable
-   ledger; compare mechanical reconciliation with direct writeback.
+2. **Ledger and shadow (current)**: append records and receipts to a dedicated
+   immutable ledger; compare mechanical reconciliation with direct writeback.
 3. **Mechanical enforcement**: promote only after shadow parity and rollback
    controls pass; reject stale revisions and duplicate effects.
 4. **Semantic escalation**: invoke bounded semantic review only for typed
