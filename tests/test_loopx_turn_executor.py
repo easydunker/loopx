@@ -26,7 +26,7 @@ from loopx.control_plane.turn_driver import (
     validate_turn_reconciliation_receipt,
     validate_turn_result_record,
 )
-from loopx.control_plane.turn_driver.executor import BuiltInHostError
+from loopx.control_plane.turn_driver.executor import BuiltInHostError, _run_host_runner
 
 
 def _content_hash(payload: dict[str, object]) -> str:
@@ -332,10 +332,12 @@ def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None
         goal_id="fixture-goal",
         timeout_seconds=5,
         execute=False,
+        reconciliation_mode="enforce",
     )
 
     assert payload["ok"] is True
     assert payload["status"] == "preview"
+    assert payload["reconciliation_mode"] == "enforce"
     assert payload["effects"] == {
         "host_invoked": False,
         "state_written": False,
@@ -367,6 +369,40 @@ def test_run_once_rejects_oversized_built_in_host_result(tmp_path: Path) -> None
 
     assert payload["ok"] is False
     assert payload["reason"] == "built-in host result exceeded the result budget"
+    assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
+
+
+def test_run_once_rejects_nonserializable_built_in_host_result(tmp_path: Path) -> None:
+    plan = _plan()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    nonserializable = _host_result(plan)
+    nonserializable["unexpected"] = {Path("private")}
+    observation = _run_host_runner(
+        {},
+        runner=lambda _request: nonserializable,
+    )
+
+    payload = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: nonserializable,
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        writeback=writeback,
+        spend=spend,
+        scheduler=scheduler,
+    )
+
+    assert observation == {
+        "ok": False,
+        "reason": "built-in host result is not JSON-serializable",
+        "returncode": None,
+    }
+    assert payload["ok"] is False
+    assert payload["reason"] == "built-in host result is not JSON-serializable"
     assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
 
 
@@ -739,6 +775,64 @@ def test_distinct_enforced_turns_serialize_revision_check_and_effects(
     assert second["status"] == "reconciliation_blocked"
     assert second["enforced_reconciliation_receipt"]["status"] == ("revision_conflict")
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_distinct_shadow_turns_close_out_concurrently(tmp_path: Path) -> None:
+    plans = [
+        _plan(turn_instance_id="2026-07-31T09:31:00Z"),
+        _plan(turn_instance_id="2026-07-31T09:31:01Z"),
+    ]
+    both_writebacks_started = Event()
+    release_writebacks = Event()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    calls_lock = Lock()
+
+    def writeback(_result: dict[str, object]) -> dict[str, object]:
+        with calls_lock:
+            calls["writeback"] += 1
+            if calls["writeback"] == 2:
+                both_writebacks_started.set()
+        assert both_writebacks_started.wait(timeout=3)
+        assert release_writebacks.wait(timeout=3)
+        return {"ok": True, "appended": True, "classification": "fixture_progress"}
+
+    def spend() -> dict[str, object]:
+        with calls_lock:
+            calls["spend"] += 1
+        return {"ok": True, "appended": True, "slots": 1}
+
+    def scheduler(_spend: dict[str, object]) -> dict[str, object]:
+        with calls_lock:
+            calls["scheduler"] += 1
+        return {
+            "completed": True,
+            "acknowledged": False,
+            "disposition": "not_required",
+        }
+
+    def run(plan: dict[str, object]) -> dict[str, object]:
+        return run_loopx_turn_once(
+            plan,
+            host_runner=lambda _request: _host_result(plan),
+            project=tmp_path,
+            runtime_root=tmp_path / "runtime",
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(run, plan) for plan in plans]
+        assert both_writebacks_started.wait(timeout=3)
+        release_writebacks.set()
+        results = [future.result(timeout=5) for future in futures]
+
+    assert {result["status"] for result in results} == {"committed"}
+    assert calls == {"writeback": 2, "spend": 2, "scheduler": 2}
 
 
 def test_concurrent_same_turn_calls_share_one_result_and_effect_sequence(
