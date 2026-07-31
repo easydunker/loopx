@@ -81,11 +81,13 @@ HOST_RESULT_FIELDS = {
 Writeback = Callable[[dict[str, Any]], dict[str, Any]]
 Spend = Callable[[], dict[str, Any]]
 Scheduler = Callable[[dict[str, Any]], dict[str, Any]]
+RevisionObserver = Callable[[], str]
 HostRunner = Callable[[Mapping[str, Any]], dict[str, Any]]
 TaskValidator = Callable[
     [Mapping[str, Any], Mapping[str, Any]],
     Mapping[str, Any],
 ]
+TURN_RECONCILIATION_MODES = {"shadow", "enforce"}
 
 
 class BuiltInHostError(RuntimeError):
@@ -119,7 +121,9 @@ def _normalize_task_validator_argv(value: Sequence[str]) -> list[str]:
 
 
 def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
-    transaction = plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    transaction = (
+        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    )
     turn_key = str(transaction.get("turn_key") or "")
     if not TURN_KEY_RE.fullmatch(turn_key):
         raise ValueError("LoopX Turn plan has no valid transaction turn_key")
@@ -224,13 +228,9 @@ def _normalize_host_path_delta(
                 "material_replan agent_vision_json requires goal_path_delta_v0"
             )
         elif agent_vision["path_delta"].get("outcome") != "replan":
-            errors.append(
-                "material_replan goal_path_delta_v0 outcome must be replan"
-            )
+            errors.append("material_replan goal_path_delta_v0 outcome must be replan")
         if unchanged_reason:
-            errors.append(
-                "material_replan cannot also declare vision_unchanged_reason"
-            )
+            errors.append("material_replan cannot also declare vision_unchanged_reason")
     elif path_delta_mode == "unchanged":
         if agent_vision is not None:
             errors.append("unchanged path_delta_mode cannot include agent_vision_json")
@@ -252,7 +252,9 @@ def validate_loopx_turn_host_result(
     if result.get("schema_version") != LOOPX_TURN_RESULT_SCHEMA_VERSION:
         errors.append("unsupported host result schema_version")
 
-    transaction = plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    transaction = (
+        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    )
     turn_key = str(transaction.get("turn_key") or "")
     if not turn_key or str(result.get("turn_key") or "") != turn_key:
         errors.append("host result turn_key does not match the transaction plan")
@@ -321,9 +323,10 @@ def validate_loopx_turn_host_result(
         normalized["path_delta_mode"] = path_delta_mode
         if agent_vision is not None:
             normalized["agent_vision"] = agent_vision
-    elif str(result.get("path_delta_mode") or "").strip() or str(
-        result.get("agent_vision_json") or ""
-    ).strip():
+    elif (
+        str(result.get("path_delta_mode") or "").strip()
+        or str(result.get("agent_vision_json") or "").strip()
+    ):
         errors.append(
             "wait and user_action_required results cannot declare a path delta"
         )
@@ -366,7 +369,9 @@ def _task_validation_receipt(
         LoopXTurnResultKind.REPAIR_REQUIRED.value,
         LoopXTurnResultKind.REPLAN_REQUIRED.value,
     }:
-        errors.append("task validation recovery_kind must be repair_required or replan_required")
+        errors.append(
+            "task validation recovery_kind must be repair_required or replan_required"
+        )
     if status in {"failed", "inconclusive", "unavailable"} and recovery_kind is None:
         errors.append("failed task validation requires a typed recovery_kind")
     if status in {"passed", "progress", "not_required"} and recovery_kind is not None:
@@ -537,7 +542,9 @@ def turn_journal_path(runtime_root: Path, *, goal_id: str, turn_key: str) -> Pat
 
 def _write_journal(path: Path, journal: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -552,7 +559,10 @@ def _load_journal(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("schema_version") != LOOPX_TURN_JOURNAL_SCHEMA_VERSION:
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != LOOPX_TURN_JOURNAL_SCHEMA_VERSION
+    ):
         raise ValueError("LoopX Turn journal has an unsupported schema")
     return value
 
@@ -571,10 +581,14 @@ def load_loopx_turn_plan_from_journal(
     plan = journal.get("plan")
     if not isinstance(plan, dict):
         raise ValueError("LoopX Turn resume journal does not contain a plan")
-    transaction = plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    transaction = (
+        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    )
     if transaction.get("turn_key") != turn_key or journal.get("turn_key") != turn_key:
         raise ValueError("LoopX Turn resume journal has mismatched turn lineage")
-    envelope = plan.get("turn_envelope") if isinstance(plan.get("turn_envelope"), dict) else {}
+    envelope = (
+        plan.get("turn_envelope") if isinstance(plan.get("turn_envelope"), dict) else {}
+    )
     if envelope.get("goal_id") != goal_id or journal.get("goal_id") != goal_id:
         raise ValueError("LoopX Turn resume journal belongs to another goal")
     return dict(plan)
@@ -611,7 +625,9 @@ def _host_failure(
     failed_phase: str,
     reason: str,
 ) -> dict[str, Any]:
-    transaction = plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    transaction = (
+        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    )
     result = {"turn_key": transaction.get("turn_key"), "result_kind": kind.value}
     return {
         "ok": False,
@@ -655,13 +671,25 @@ def _run_host(
         }
     encoded = completed.stdout.encode("utf-8")
     if len(encoded) > HOST_RESULT_MAX_BYTES:
-        return {"ok": False, "reason": "host stdout exceeded the result budget", "returncode": 0}
+        return {
+            "ok": False,
+            "reason": "host stdout exceeded the result budget",
+            "returncode": 0,
+        }
     try:
         value = json.loads(completed.stdout)
     except json.JSONDecodeError:
-        return {"ok": False, "reason": "host stdout is not one JSON value", "returncode": 0}
+        return {
+            "ok": False,
+            "reason": "host stdout is not one JSON value",
+            "returncode": 0,
+        }
     if not isinstance(value, dict):
-        return {"ok": False, "reason": "host stdout must be one JSON object", "returncode": 0}
+        return {
+            "ok": False,
+            "reason": "host stdout must be one JSON object",
+            "returncode": 0,
+        }
     return {"ok": True, "value": value, "returncode": 0}
 
 
@@ -678,16 +706,28 @@ def _run_host_runner(
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if not isinstance(value, dict):
         return {"ok": False, "reason": "built-in host result must be one JSON object"}
-    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     if len(encoded) > HOST_RESULT_MAX_BYTES:
-        return {"ok": False, "reason": "built-in host result exceeded the result budget"}
+        return {
+            "ok": False,
+            "reason": "built-in host result exceeded the result budget",
+        }
     return {"ok": True, "value": value, "returncode": 0}
 
 
 def _compact_callback(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: payload.get(key)
-        for key in ("ok", "appended", "classification", "generated_at", "slots", "reason")
+        for key in (
+            "ok",
+            "appended",
+            "classification",
+            "generated_at",
+            "slots",
+            "reason",
+        )
         if key in payload
     }
 
@@ -700,7 +740,9 @@ def _execution_payload(
     replayed: bool,
     effects: Mapping[str, bool],
 ) -> dict[str, Any]:
-    transaction = plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    transaction = (
+        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+    )
     turn_key = str(transaction.get("turn_key") or "")
     planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
     result_record = (
@@ -718,7 +760,15 @@ def _execution_payload(
         if isinstance(journal.get("shadow_reconciliation_receipt"), dict)
         else None
     )
-    if result_record is not None and not validate_turn_result_record(result_record)["ok"]:
+    enforced_reconciliation_receipt = (
+        dict(journal["enforced_reconciliation_receipt"])
+        if isinstance(journal.get("enforced_reconciliation_receipt"), dict)
+        else None
+    )
+    if (
+        result_record is not None
+        and not validate_turn_result_record(result_record)["ok"]
+    ):
         raise ValueError("LoopX Turn journal result record failed identity validation")
     host_result = (
         dict(journal["host_result"])
@@ -728,7 +778,9 @@ def _execution_payload(
     if result_record is not None and host_result is not None:
         expected_result_record = build_turn_result_record(plan, host_result)
         if result_record.get("record_id") != expected_result_record.get("record_id"):
-            raise ValueError("LoopX Turn journal result record does not match host result")
+            raise ValueError(
+                "LoopX Turn journal result record does not match host result"
+            )
     if reconciliation_receipt is not None:
         if not validate_turn_reconciliation_receipt(reconciliation_receipt)["ok"]:
             raise ValueError(
@@ -746,29 +798,29 @@ def _execution_payload(
             or reconciliation_receipt.get("turn_key") != result_record.get("turn_key")
             or reconciliation_receipt.get("expected_revision")
             != result_record.get("based_on_revision")
-            or reconciliation_receipt.get("proposed_effect_ids")
-            != expected_effect_ids
+            or reconciliation_receipt.get("proposed_effect_ids") != expected_effect_ids
         ):
             raise ValueError(
                 "LoopX Turn journal reconciliation receipt has mismatched lineage"
             )
-    if shadow_reconciliation_receipt is not None:
-        if not validate_turn_reconciliation_receipt(
-            shadow_reconciliation_receipt
-        )["ok"]:
+    for receipt_name, receipt_value in (
+        ("shadow", shadow_reconciliation_receipt),
+        ("enforced", enforced_reconciliation_receipt),
+    ):
+        if receipt_value is None:
+            continue
+        if not validate_turn_reconciliation_receipt(receipt_value)["ok"]:
             raise ValueError(
-                "LoopX Turn journal shadow reconciliation receipt failed identity "
-                "validation"
+                f"LoopX Turn journal {receipt_name} reconciliation receipt failed "
+                "identity validation"
             )
         if (
             result_record is None
-            or shadow_reconciliation_receipt.get("result_record_id")
-            != result_record.get("record_id")
-            or shadow_reconciliation_receipt.get("turn_key")
-            != result_record.get("turn_key")
-            or shadow_reconciliation_receipt.get("expected_revision")
+            or receipt_value.get("result_record_id") != result_record.get("record_id")
+            or receipt_value.get("turn_key") != result_record.get("turn_key")
+            or receipt_value.get("expected_revision")
             != result_record.get("based_on_revision")
-            or shadow_reconciliation_receipt.get("proposed_effect_ids")
+            or receipt_value.get("proposed_effect_ids")
             != [
                 str(item.get("effect_id") or "")
                 for item in result_record.get("proposed_effects") or []
@@ -776,18 +828,20 @@ def _execution_payload(
             ]
         ):
             raise ValueError(
-                "LoopX Turn journal shadow reconciliation receipt has mismatched "
-                "lineage"
+                f"LoopX Turn journal {receipt_name} reconciliation receipt has "
+                "mismatched lineage"
             )
     quota_spent = effects.get("quota_spent") is True or "quota_spend" in list(
         journal.get("completed_phases") or []
     )
     return {
-        "ok": journal.get("status") in {
+        "ok": journal.get("status")
+        in {
             "preview",
             "committed",
             "stopped",
             "scheduler_action_required",
+            "reconciliation_blocked",
         },
         "schema_version": LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
         "mode": "run_once",
@@ -803,9 +857,9 @@ def _execution_payload(
         "receipt": journal.get("receipt"),
         "result_record": result_record,
         "reconciliation_receipt": reconciliation_receipt,
-        "shadow_reconciliation_receipt": (
-            shadow_reconciliation_receipt
-        ),
+        "shadow_reconciliation_receipt": (shadow_reconciliation_receipt),
+        "enforced_reconciliation_receipt": enforced_reconciliation_receipt,
+        "reconciliation_mode": journal.get("reconciliation_mode", "shadow"),
         "result_ledger": (
             dict(journal["result_ledger"])
             if isinstance(journal.get("result_ledger"), dict)
@@ -830,6 +884,7 @@ def _host_result_stage(
     journal_path: Path,
     result_ledger_path: Path,
     effects: dict[str, bool],
+    reconciliation_mode: str,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     result = (
@@ -929,14 +984,16 @@ def _host_result_stage(
     expected_reconciliation_receipt = build_turn_reconciliation_receipt(
         result_record,
         status=(
-            "not_required"
-            if not result_record["proposed_effects"]
-            else "not_attempted"
+            "not_required" if not result_record["proposed_effects"] else "not_attempted"
         ),
         reason=(
             "typed_stop_has_no_proposed_effects"
             if not result_record["proposed_effects"]
-            else "legacy_direct_writeback_not_reconciled"
+            else (
+                "mechanical_reconciliation_pending"
+                if reconciliation_mode == "enforce"
+                else "legacy_direct_writeback_not_reconciled"
+            )
         ),
     )
     reconciliation_receipt = (
@@ -1098,6 +1155,105 @@ def _record_shadow_reconciliation(
     )
 
 
+def _proposed_effect_ids(result_record: Mapping[str, Any]) -> list[str]:
+    return [
+        str(effect.get("effect_id") or "")
+        for effect in result_record.get("proposed_effects") or []
+        if isinstance(effect, Mapping)
+    ]
+
+
+def _record_enforced_reconciliation(
+    journal: dict[str, Any],
+    *,
+    result_ledger_path: Path,
+    status: str,
+    observed_revision: str,
+    applied_effect_ids: Sequence[str] = (),
+    reason: str,
+) -> None:
+    result_record = (
+        dict(journal["result_record"])
+        if isinstance(journal.get("result_record"), dict)
+        else None
+    )
+    if result_record is None:
+        raise ValueError("mechanical reconciliation requires one result record")
+    receipt = build_turn_reconciliation_receipt(
+        result_record,
+        status=status,
+        observed_revision=observed_revision,
+        applied_effect_ids=applied_effect_ids,
+        reason=reason,
+    )
+    journal.update(
+        enforced_reconciliation_receipt=receipt,
+        result_ledger=append_turn_result_ledger_records(
+            result_ledger_path,
+            [receipt],
+        ),
+    )
+
+
+def _enforcement_revision_stage(
+    plan: Mapping[str, Any],
+    result: Mapping[str, Any],
+    *,
+    completed_phases: list[str],
+    journal: dict[str, Any],
+    journal_path: Path,
+    result_ledger_path: Path,
+    effects: dict[str, bool],
+    observe_revision: RevisionObserver | None,
+) -> dict[str, Any] | None:
+    if "durable_writeback" in completed_phases:
+        if not str(journal.get("reconciliation_observed_revision") or ""):
+            raise ValueError(
+                "mechanical reconciliation resume has no observed revision"
+            )
+        return None
+    if observe_revision is None:
+        raise ValueError(
+            "enforced mechanical reconciliation requires a revision observer"
+        )
+    observed_revision = str(observe_revision() or "")
+    if not observed_revision:
+        raise ValueError("mechanical reconciliation observed an empty revision")
+    result_record = (
+        dict(journal["result_record"])
+        if isinstance(journal.get("result_record"), dict)
+        else {}
+    )
+    expected_revision = str(result_record.get("based_on_revision") or "")
+    journal["reconciliation_observed_revision"] = observed_revision
+    if observed_revision == expected_revision:
+        journal["reconciliation_mode"] = "enforce"
+        _write_journal(journal_path, journal)
+        return None
+
+    _record_enforced_reconciliation(
+        journal,
+        result_ledger_path=result_ledger_path,
+        status="revision_conflict",
+        observed_revision=observed_revision,
+        reason="canonical_action_revision_changed_before_effects",
+    )
+    journal.update(
+        status="reconciliation_blocked",
+        reconciliation_mode="enforce",
+        reason="canonical action revision changed before mechanical reconciliation",
+        receipt=_receipt(plan, result, completed_phases=completed_phases),
+    )
+    _write_journal(journal_path, journal)
+    return _execution_payload(
+        plan,
+        journal,
+        execute=True,
+        replayed=False,
+        effects=effects,
+    )
+
+
 def _transaction_closeout_stage(
     plan: Mapping[str, Any],
     result: dict[str, Any],
@@ -1110,7 +1266,23 @@ def _transaction_closeout_stage(
     writeback: Writeback,
     spend: Spend,
     scheduler: Scheduler,
+    reconciliation_mode: str,
+    observe_revision: RevisionObserver | None,
 ) -> dict[str, Any]:
+    if reconciliation_mode == "enforce":
+        blocked = _enforcement_revision_stage(
+            plan,
+            result,
+            completed_phases=completed_phases,
+            journal=journal,
+            journal_path=journal_path,
+            result_ledger_path=result_ledger_path,
+            effects=effects,
+            observe_revision=observe_revision,
+        )
+        if blocked is not None:
+            return blocked
+
     if "durable_writeback" not in completed_phases:
         writeback_payload = writeback(result)
         if not writeback_payload.get("ok") or not writeback_payload.get("appended"):
@@ -1130,12 +1302,13 @@ def _transaction_closeout_stage(
                 reason=failure["reason"],
                 receipt=failure["receipt"],
             )
-            _record_shadow_reconciliation(
-                journal,
-                result_ledger_path=result_ledger_path,
-                completed_phases=completed_phases,
-                scheduler_completed=False,
-            )
+            if reconciliation_mode == "shadow":
+                _record_shadow_reconciliation(
+                    journal,
+                    result_ledger_path=result_ledger_path,
+                    completed_phases=completed_phases,
+                    scheduler_completed=False,
+                )
             _write_journal(journal_path, journal)
             return _execution_payload(
                 plan,
@@ -1167,12 +1340,13 @@ def _transaction_closeout_stage(
                 reason=failure["reason"],
                 receipt=failure["receipt"],
             )
-            _record_shadow_reconciliation(
-                journal,
-                result_ledger_path=result_ledger_path,
-                completed_phases=completed_phases,
-                scheduler_completed=False,
-            )
+            if reconciliation_mode == "shadow":
+                _record_shadow_reconciliation(
+                    journal,
+                    result_ledger_path=result_ledger_path,
+                    completed_phases=completed_phases,
+                    scheduler_completed=False,
+                )
             _write_journal(journal_path, journal)
             return _execution_payload(
                 plan,
@@ -1202,12 +1376,13 @@ def _transaction_closeout_stage(
             status="scheduler_action_required",
             receipt=_receipt(plan, result, completed_phases=completed_phases),
         )
-        _record_shadow_reconciliation(
-            journal,
-            result_ledger_path=result_ledger_path,
-            completed_phases=completed_phases,
-            scheduler_completed=False,
-        )
+        if reconciliation_mode == "shadow":
+            _record_shadow_reconciliation(
+                journal,
+                result_ledger_path=result_ledger_path,
+                completed_phases=completed_phases,
+                scheduler_completed=False,
+            )
         _write_journal(journal_path, journal)
         return _execution_payload(
             plan,
@@ -1224,12 +1399,27 @@ def _transaction_closeout_stage(
         completed_phases=completed_phases,
         receipt=_receipt(plan, result, completed_phases=completed_phases),
     )
-    _record_shadow_reconciliation(
-        journal,
-        result_ledger_path=result_ledger_path,
-        completed_phases=completed_phases,
-        scheduler_completed=True,
-    )
+    if reconciliation_mode == "enforce":
+        result_record = (
+            dict(journal["result_record"])
+            if isinstance(journal.get("result_record"), dict)
+            else {}
+        )
+        _record_enforced_reconciliation(
+            journal,
+            result_ledger_path=result_ledger_path,
+            status="applied",
+            observed_revision=str(journal["reconciliation_observed_revision"]),
+            applied_effect_ids=_proposed_effect_ids(result_record),
+            reason="mechanical_effect_sequence_applied",
+        )
+    else:
+        _record_shadow_reconciliation(
+            journal,
+            result_ledger_path=result_ledger_path,
+            completed_phases=completed_phases,
+            scheduler_completed=True,
+        )
     _write_journal(journal_path, journal)
     return _execution_payload(
         plan,
@@ -1255,7 +1445,11 @@ def run_loopx_turn_once(
     writeback: Writeback | None = None,
     spend: Spend | None = None,
     scheduler: Scheduler | None = None,
+    reconciliation_mode: str = "shadow",
+    observe_revision: RevisionObserver | None = None,
 ) -> dict[str, Any]:
+    if reconciliation_mode not in TURN_RECONCILIATION_MODES:
+        raise ValueError("unsupported Turn reconciliation mode")
     if host_runner is not None and host_argv is not None:
         raise ValueError("run-once accepts either host_argv or host_runner, not both")
     if host_runner is None:
@@ -1292,7 +1486,9 @@ def run_loopx_turn_once(
             effects=empty_effects,
         )
     if writeback is None or spend is None or scheduler is None:
-        raise ValueError("executing run-once requires writeback, spend, and scheduler callbacks")
+        raise ValueError(
+            "executing run-once requires writeback, spend, and scheduler callbacks"
+        )
 
     turn_key = str(request["turn_key"])
     journal_path = turn_journal_path(runtime_root, goal_id=goal_id, turn_key=turn_key)
@@ -1301,7 +1497,10 @@ def run_loopx_turn_once(
         journal = _load_journal(journal_path)
         if journal and (
             journal.get("status") in {"committed", "stopped"}
-            or journal.get("status") == "failed" and not retry_failed
+            or journal.get("status") == "failed"
+            and not retry_failed
+            or journal.get("status") == "reconciliation_blocked"
+            and reconciliation_mode == "enforce"
         ):
             return _execution_payload(
                 plan,
@@ -1310,8 +1509,22 @@ def run_loopx_turn_once(
                 replayed=True,
                 effects=empty_effects,
             )
+        if (
+            journal
+            and journal.get("status") == "reconciliation_blocked"
+            and reconciliation_mode == "shadow"
+        ):
+            journal.pop("reason", None)
+            journal.pop("receipt", None)
+            journal["status"] = "in_progress"
+            journal["reconciliation_mode"] = "shadow"
+            _write_journal(journal_path, journal)
         if journal and journal.get("status") == "failed":
-            receipt = journal.get("receipt") if isinstance(journal.get("receipt"), dict) else {}
+            receipt = (
+                journal.get("receipt")
+                if isinstance(journal.get("receipt"), dict)
+                else {}
+            )
             if receipt.get("failed_phase") == "validation":
                 if journal.get("validation_stage") != "task_postcondition":
                     journal.pop("host_result", None)
@@ -1338,9 +1551,19 @@ def run_loopx_turn_once(
                 "host": host_projection,
                 "completed_phases": [],
                 "plan": dict(plan),
+                "reconciliation_mode": reconciliation_mode,
             }
             _write_journal(journal_path, journal)
 
+        record_reconciliation_mode = str(
+            journal.get("initial_reconciliation_mode")
+            or journal.get("reconciliation_mode")
+            or "shadow"
+        )
+        journal.setdefault(
+            "initial_reconciliation_mode",
+            record_reconciliation_mode,
+        )
         effects = dict(empty_effects)
         result, completed_phases, terminal = _host_result_stage(
             plan,
@@ -1353,6 +1576,7 @@ def run_loopx_turn_once(
             journal_path=journal_path,
             result_ledger_path=ledger_path,
             effects=effects,
+            reconciliation_mode=record_reconciliation_mode,
         )
         if terminal is not None:
             return terminal
@@ -1381,4 +1605,6 @@ def run_loopx_turn_once(
             writeback=writeback,
             spend=spend,
             scheduler=scheduler,
+            reconciliation_mode=reconciliation_mode,
+            observe_revision=observe_revision,
         )
