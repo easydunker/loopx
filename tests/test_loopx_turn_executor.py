@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Lock
 
 import pytest
 
 from loopx.control_plane.turn_driver import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
+    TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,
+    TURN_RESULT_RECORD_SCHEMA_VERSION,
     build_loopx_turn_plan,
+    build_turn_reconciliation_receipt,
+    build_turn_result_record,
     load_loopx_turn_plan_from_journal,
     run_loopx_turn_once,
     validate_loopx_turn_host_result,
+    validate_turn_reconciliation_receipt,
+    validate_turn_result_record,
 )
 from loopx.control_plane.turn_driver.executor import BuiltInHostError
 
@@ -132,6 +140,42 @@ def test_host_result_requires_bounded_public_material_fields() -> None:
     assert "unsupported host result fields" in " ".join(validation["errors"])
 
 
+def test_result_and_reconciliation_records_have_stable_content_identity() -> None:
+    plan = _plan()
+    result = _host_result(plan)
+
+    record = build_turn_result_record(plan, result)
+    repeated = build_turn_result_record(plan, result)
+    receipt = build_turn_reconciliation_receipt(
+        record,
+        status="not_attempted",
+        reason="legacy_direct_writeback_not_reconciled",
+    )
+
+    assert record == repeated
+    assert record["schema_version"] == TURN_RESULT_RECORD_SCHEMA_VERSION
+    assert record["lineage"] == {
+        "goal_id": "fixture-goal",
+        "agent_id": "codex-fixture",
+        "todo_id": "todo_fixture0001",
+    }
+    assert record["based_on_revision"] == "sha256:fixture"
+    assert [effect["kind"] for effect in record["proposed_effects"]] == [
+        "goal_state_refresh",
+        "quota_spend",
+        "scheduler_reconcile",
+    ]
+    assert validate_turn_result_record(record)["ok"] is True
+    assert receipt["schema_version"] == TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION
+    assert receipt["status"] == "not_attempted"
+    assert receipt["applied_effect_ids"] == []
+    assert validate_turn_reconciliation_receipt(receipt)["ok"] is True
+
+    tampered = dict(record)
+    tampered["result_kind"] = "wait"
+    assert validate_turn_result_record(tampered)["ok"] is False
+
+
 def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None:
     plan = _plan()
 
@@ -248,7 +292,111 @@ def test_run_once_commits_once_and_replays_without_duplicate_effects(tmp_path: P
     assert first["effects"]["quota_spent"] is True
     assert replay["replayed"] is True
     assert not any(replay["effects"].values())
+    assert first["result_record"] == replay["result_record"]
+    assert first["reconciliation_receipt"] == replay["reconciliation_receipt"]
+    assert first["reconciliation_receipt"]["status"] == "not_attempted"
     assert count_path.read_text(encoding="utf-8") == "1"
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_concurrent_same_turn_calls_share_one_result_and_effect_sequence(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    counters = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    counter_lock = Lock()
+    host_started = Event()
+    second_started = Event()
+    release_host = Event()
+
+    def increment(key: str) -> None:
+        with counter_lock:
+            counters[key] += 1
+
+    def host(_request: dict[str, object]) -> dict[str, object]:
+        increment("host")
+        host_started.set()
+        assert release_host.wait(timeout=3)
+        return _host_result(plan)
+
+    def writeback(_result: dict[str, object]) -> dict[str, object]:
+        increment("writeback")
+        return {"ok": True, "appended": True, "classification": "fixture_progress"}
+
+    def spend() -> dict[str, object]:
+        increment("spend")
+        return {"ok": True, "appended": True, "slots": 1}
+
+    def scheduler(_spend: dict[str, object]) -> dict[str, object]:
+        increment("scheduler")
+        return {"completed": True, "acknowledged": False, "disposition": "not_required"}
+
+    kwargs = {
+        "host_runner": host,
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+    }
+
+    def run_second() -> dict[str, object]:
+        second_started.set()
+        return run_loopx_turn_once(plan, **kwargs)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(run_loopx_turn_once, plan, **kwargs)
+        assert host_started.wait(timeout=3)
+        second_future = pool.submit(run_second)
+        assert second_started.wait(timeout=3)
+        release_host.set()
+        results = [first_future.result(timeout=5), second_future.result(timeout=5)]
+
+    assert sorted(result["replayed"] for result in results) == [False, True]
+    assert {result["status"] for result in results} == {"committed"}
+    assert len({result["result_record"]["record_id"] for result in results}) == 1
+    assert len(
+        {
+            result["reconciliation_receipt"]["receipt_id"]
+            for result in results
+        }
+    ) == 1
+    assert counters == {"host": 1, "writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_committed_replay_rejects_tampered_result_record(tmp_path: Path) -> None:
+    plan = _plan()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    kwargs = {
+        "host_runner": lambda _request: _host_result(plan),
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+    }
+    committed = run_loopx_turn_once(plan, **kwargs)
+    assert committed["status"] == "committed"
+
+    journal_path = next(
+        (tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob("*.json")
+    )
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    journal["result_record"]["result_kind"] = "wait"
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="result record failed identity validation"):
+        run_loopx_turn_once(plan, **kwargs)
+
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
 
 
@@ -285,10 +433,16 @@ def test_run_once_recovers_after_process_exit_before_writeback(tmp_path: Path) -
     ]
     assert interrupted["task_validation"]["status"] == "passed"
     assert "writeback" not in interrupted
+    assert interrupted["result_record"]["schema_version"] == (
+        TURN_RESULT_RECORD_SCHEMA_VERSION
+    )
+    assert interrupted["reconciliation_receipt"]["status"] == "not_attempted"
+    result_record_id = interrupted["result_record"]["record_id"]
 
     recovered = run_loopx_turn_once(plan, writeback=healthy_writeback, **common)
 
     assert recovered["status"] == "committed"
+    assert recovered["result_record"]["record_id"] == result_record_id
     assert count_path.read_text(encoding="utf-8") == "1"
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
 
