@@ -290,6 +290,8 @@ def build_turn_reconciliation_receipt(
         for item in result_record.get("proposed_effects") or []
     ]
     applied = [str(item) for item in applied_effect_ids]
+    if len(set(applied)) != len(applied):
+        raise ValueError("reconciliation applied_effect_ids must be unique")
     if not set(applied).issubset(proposed_effect_ids):
         raise ValueError("reconciliation applied_effect_ids must reference proposed effects")
     if status == "not_attempted" and not proposed_effect_ids:

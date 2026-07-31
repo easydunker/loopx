@@ -1198,6 +1198,8 @@ def run_loopx_turn_once(
             if receipt.get("failed_phase") == "validation":
                 if journal.get("validation_stage") != "task_postcondition":
                     journal.pop("host_result", None)
+                    journal.pop("result_record", None)
+                    journal.pop("reconciliation_receipt", None)
                 journal.pop("result_kind", None)
                 journal["completed_phases"] = (
                     list(TRANSACTION_PHASES[:2])
