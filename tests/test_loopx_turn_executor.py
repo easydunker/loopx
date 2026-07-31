@@ -272,6 +272,28 @@ def test_result_ledger_rejects_dangling_or_corrupt_rows(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == "{not-json}\n"
 
 
+def test_result_ledger_recovers_one_torn_trailing_row(tmp_path: Path) -> None:
+    plan = _plan()
+    record = build_turn_result_record(plan, _host_result(plan))
+    receipt = build_turn_reconciliation_receipt(
+        record,
+        status="not_attempted",
+        reason="legacy_direct_writeback_not_reconciled",
+    )
+    path = tmp_path / "turn-result-ledger.jsonl"
+    append_turn_result_ledger_records(path, [record])
+    with path.open("ab") as handle:
+        handle.write(b'{"schema_version":"turn_result_record_v0"')
+
+    assert read_turn_result_ledger(path) == [record]
+
+    recovered = append_turn_result_ledger_records(path, [receipt])
+
+    assert recovered["status"] == "appended"
+    assert read_turn_result_ledger(path) == [record, receipt]
+    assert path.read_bytes().endswith(b"\n")
+
+
 def test_shadow_reconciliation_compares_direct_effect_sequence() -> None:
     plan = _plan()
     record = build_turn_result_record(plan, _host_result(plan))

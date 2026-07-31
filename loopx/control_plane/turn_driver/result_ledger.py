@@ -43,19 +43,32 @@ def _record_identity(value: Mapping[str, Any]) -> tuple[str, str]:
     return schema_version, identity
 
 
+def _complete_ledger_text(path: Path) -> tuple[str, int]:
+    """Return newline-committed ledger text and its durable byte boundary."""
+
+    payload = path.read_bytes()
+    complete_size = len(payload)
+    if payload and not payload.endswith(b"\n"):
+        final_newline = payload.rfind(b"\n")
+        complete_size = final_newline + 1
+        payload = payload[:complete_size]
+    try:
+        return payload.decode("utf-8"), complete_size
+    except UnicodeDecodeError as exc:
+        raise ValueError("Turn result ledger contains invalid UTF-8") from exc
+
+
 def read_turn_result_ledger(path: Path) -> list[dict[str, Any]]:
     """Read and validate every immutable row in one result ledger."""
 
     if not path.exists():
         return []
+    text, _complete_size = _complete_ledger_text(path)
     rows: list[dict[str, Any]] = []
     identities: dict[tuple[str, str], dict[str, Any]] = {}
     result_record_ids: set[str] = set()
     receipts: list[dict[str, Any]] = []
-    for line_number, raw_line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(),
-        start=1,
-    ):
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
         if not raw_line.strip():
             raise ValueError(f"Turn result ledger row {line_number} is empty")
         try:
@@ -110,6 +123,15 @@ def append_turn_result_ledger_records(
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(path):
+        if path.exists():
+            _text, complete_size = _complete_ledger_text(path)
+            if complete_size < path.stat().st_size:
+                descriptor = os.open(path, os.O_WRONLY)
+                try:
+                    os.ftruncate(descriptor, complete_size)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
         existing = read_turn_result_ledger(path)
         existing_by_key = {_record_identity(row): row for row in existing}
         known_result_ids = {
