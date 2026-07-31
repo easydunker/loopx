@@ -8,6 +8,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -706,15 +707,54 @@ def _run_host_runner(
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if not isinstance(value, dict):
         return {"ok": False, "reason": "built-in host result must be one JSON object"}
-    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    except (TypeError, ValueError):
+        return {
+            "ok": False,
+            "reason": "built-in host result is not JSON-serializable",
+            "returncode": None,
+        }
     if len(encoded) > HOST_RESULT_MAX_BYTES:
         return {
             "ok": False,
             "reason": "built-in host result exceeded the result budget",
         }
     return {"ok": True, "value": value, "returncode": 0}
+
+
+def _validate_receipt_lineage(
+    receipt: Mapping[str, Any] | None,
+    result_record: Mapping[str, Any] | None,
+    *,
+    label: str = "",
+) -> None:
+    if receipt is None:
+        return
+    receipt_label = f"{label} " if label else ""
+    if not validate_turn_reconciliation_receipt(receipt)["ok"]:
+        raise ValueError(
+            f"LoopX Turn journal {receipt_label}reconciliation receipt failed "
+            "identity validation"
+        )
+    expected_effect_ids = [
+        str(item.get("effect_id") or "")
+        for item in (result_record or {}).get("proposed_effects") or []
+        if isinstance(item, dict)
+    ]
+    if (
+        result_record is None
+        or receipt.get("result_record_id") != result_record.get("record_id")
+        or receipt.get("turn_key") != result_record.get("turn_key")
+        or receipt.get("expected_revision") != result_record.get("based_on_revision")
+        or receipt.get("proposed_effect_ids") != expected_effect_ids
+    ):
+        raise ValueError(
+            f"LoopX Turn journal {receipt_label}reconciliation receipt has "
+            "mismatched lineage"
+        )
 
 
 def _compact_callback(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -781,56 +821,16 @@ def _execution_payload(
             raise ValueError(
                 "LoopX Turn journal result record does not match host result"
             )
-    if reconciliation_receipt is not None:
-        if not validate_turn_reconciliation_receipt(reconciliation_receipt)["ok"]:
-            raise ValueError(
-                "LoopX Turn journal reconciliation receipt failed identity validation"
-            )
-        expected_effect_ids = [
-            str(item.get("effect_id") or "")
-            for item in (result_record or {}).get("proposed_effects") or []
-            if isinstance(item, dict)
-        ]
-        if (
-            result_record is None
-            or reconciliation_receipt.get("result_record_id")
-            != result_record.get("record_id")
-            or reconciliation_receipt.get("turn_key") != result_record.get("turn_key")
-            or reconciliation_receipt.get("expected_revision")
-            != result_record.get("based_on_revision")
-            or reconciliation_receipt.get("proposed_effect_ids") != expected_effect_ids
-        ):
-            raise ValueError(
-                "LoopX Turn journal reconciliation receipt has mismatched lineage"
-            )
+    _validate_receipt_lineage(reconciliation_receipt, result_record)
     for receipt_name, receipt_value in (
         ("shadow", shadow_reconciliation_receipt),
         ("enforced", enforced_reconciliation_receipt),
     ):
-        if receipt_value is None:
-            continue
-        if not validate_turn_reconciliation_receipt(receipt_value)["ok"]:
-            raise ValueError(
-                f"LoopX Turn journal {receipt_name} reconciliation receipt failed "
-                "identity validation"
-            )
-        if (
-            result_record is None
-            or receipt_value.get("result_record_id") != result_record.get("record_id")
-            or receipt_value.get("turn_key") != result_record.get("turn_key")
-            or receipt_value.get("expected_revision")
-            != result_record.get("based_on_revision")
-            or receipt_value.get("proposed_effect_ids")
-            != [
-                str(item.get("effect_id") or "")
-                for item in result_record.get("proposed_effects") or []
-                if isinstance(item, dict)
-            ]
-        ):
-            raise ValueError(
-                f"LoopX Turn journal {receipt_name} reconciliation receipt has "
-                "mismatched lineage"
-            )
+        _validate_receipt_lineage(
+            receipt_value,
+            result_record,
+            label=receipt_name,
+        )
     quota_spent = effects.get("quota_spent") is True or "quota_spend" in list(
         journal.get("completed_phases") or []
     )
@@ -1477,6 +1477,7 @@ def run_loopx_turn_once(
             "result_kind": None,
             "receipt": None,
             "scheduler": {"disposition": "not_evaluated"},
+            "reconciliation_mode": reconciliation_mode,
         }
         return _execution_payload(
             plan,
@@ -1594,8 +1595,12 @@ def run_loopx_turn_once(
         if terminal is not None:
             return terminal
 
-        reconciliation_lock_target = ledger_path.with_name("turn-reconciliation")
-        with exclusive_file_lock(reconciliation_lock_target):
+        closeout_lock = (
+            exclusive_file_lock(ledger_path.with_name("turn-reconciliation"))
+            if reconciliation_mode == "enforce"
+            else nullcontext()
+        )
+        with closeout_lock:
             return _transaction_closeout_stage(
                 plan,
                 result,
