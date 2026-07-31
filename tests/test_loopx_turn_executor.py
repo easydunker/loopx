@@ -39,7 +39,7 @@ def _content_hash(payload: dict[str, object]) -> str:
     return "sha256:" + sha256(encoded).hexdigest()
 
 
-def _plan() -> dict[str, object]:
+def _plan(*, turn_instance_id: str | None = None) -> dict[str, object]:
     return build_loopx_turn_plan(
         {
             "ok": True,
@@ -73,6 +73,7 @@ def _plan() -> dict[str, object]:
         },
         host="generic-cli",
         execution_mode="isolated-headless",
+        turn_instance_id=turn_instance_id,
     )
 
 
@@ -658,6 +659,86 @@ def test_run_once_enforcement_resume_reuses_checked_revision(
         "spend": 1,
         "scheduler": 1,
     }
+
+
+def test_distinct_enforced_turns_serialize_revision_check_and_effects(
+    tmp_path: Path,
+) -> None:
+    plans = [
+        _plan(turn_instance_id="2026-07-31T09:30:00Z"),
+        _plan(turn_instance_id="2026-07-31T09:30:01Z"),
+    ]
+    current_revision = {"value": "sha256:fixture"}
+    first_writeback_started = Event()
+    second_host_completed = Event()
+    release_first_writeback = Event()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    calls_lock = Lock()
+
+    def observe_revision() -> str:
+        return current_revision["value"]
+
+    def writeback(_result: dict[str, object]) -> dict[str, object]:
+        with calls_lock:
+            calls["writeback"] += 1
+            call_number = calls["writeback"]
+        assert call_number == 1
+        first_writeback_started.set()
+        assert release_first_writeback.wait(timeout=3)
+        current_revision["value"] = "sha256:advanced"
+        return {"ok": True, "appended": True, "classification": "fixture_progress"}
+
+    def spend() -> dict[str, object]:
+        with calls_lock:
+            calls["spend"] += 1
+        return {"ok": True, "appended": True, "slots": 1}
+
+    def scheduler(_spend: dict[str, object]) -> dict[str, object]:
+        with calls_lock:
+            calls["scheduler"] += 1
+        return {
+            "completed": True,
+            "acknowledged": False,
+            "disposition": "not_required",
+        }
+
+    def run(index: int) -> dict[str, object]:
+        plan = plans[index]
+
+        def host(_request: dict[str, object]) -> dict[str, object]:
+            if index == 1:
+                second_host_completed.set()
+            return _host_result(plan)
+
+        return run_loopx_turn_once(
+            plan,
+            host_runner=host,
+            project=tmp_path,
+            runtime_root=tmp_path / "runtime",
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            reconciliation_mode="enforce",
+            observe_revision=observe_revision,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(run, 0)
+        assert first_writeback_started.wait(timeout=3)
+        second_future = pool.submit(run, 1)
+        assert second_host_completed.wait(timeout=3)
+        release_first_writeback.set()
+        first = first_future.result(timeout=5)
+        second = second_future.result(timeout=5)
+
+    assert first["status"] == "committed"
+    assert second["status"] == "reconciliation_blocked"
+    assert second["enforced_reconciliation_receipt"]["status"] == ("revision_conflict")
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
 
 
 def test_concurrent_same_turn_calls_share_one_result_and_effect_sequence(

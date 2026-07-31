@@ -1594,17 +1594,19 @@ def run_loopx_turn_once(
         if terminal is not None:
             return terminal
 
-        return _transaction_closeout_stage(
-            plan,
-            result,
-            completed_phases=completed_phases,
-            journal=journal,
-            journal_path=journal_path,
-            result_ledger_path=ledger_path,
-            effects=effects,
-            writeback=writeback,
-            spend=spend,
-            scheduler=scheduler,
-            reconciliation_mode=reconciliation_mode,
-            observe_revision=observe_revision,
-        )
+        reconciliation_lock_target = ledger_path.with_name("turn-reconciliation")
+        with exclusive_file_lock(reconciliation_lock_target):
+            return _transaction_closeout_stage(
+                plan,
+                result,
+                completed_phases=completed_phases,
+                journal=journal,
+                journal_path=journal_path,
+                result_ledger_path=ledger_path,
+                effects=effects,
+                writeback=writeback,
+                spend=spend,
+                scheduler=scheduler,
+                reconciliation_mode=reconciliation_mode,
+                observe_revision=observe_revision,
+            )

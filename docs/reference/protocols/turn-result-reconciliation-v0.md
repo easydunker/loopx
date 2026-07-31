@@ -25,6 +25,12 @@ effect, resumes only from its journaled checked revision, and appends an
 `applied` receipt after the complete effect sequence. The callbacks remain the
 canonical effect providers; semantic review remains a later stage.
 
+All Turn closeout paths share one goal-scoped reconciliation lock. This keeps
+the revision observation and effect sequence atomic relative to other Turns
+for the same goal: a competing enforced Turn observes the first Turn's state
+change and fails with `revision_conflict` instead of applying from the same
+stale revision.
+
 Use `--reconciliation-mode enforce` to opt in. If a Turn stops with
 `reconciliation_blocked`, rerun that exact Turn with
 `--reconciliation-mode shadow` to use the explicit rollback path. Shadow
@@ -211,6 +217,7 @@ validated result and reconciliation observations:
 | Enforced path sees the expected revision | The journal freezes the observed revision before effects and appends an `applied` receipt only after the complete effect sequence. |
 | Enforced path sees a stale revision | No callback runs; a `revision_conflict` receipt is appended and the Turn becomes `reconciliation_blocked`. |
 | Enforced path resumes after a committed phase | The journaled checked revision is reused and already completed callbacks are not repeated. |
+| Distinct Turns race from one revision | Goal-scoped closeout serialization lets one Turn apply; the other rechecks the advanced revision and stops before callbacks. |
 | Operator rolls back a blocked enforced Turn | The same journal resumes in `shadow` mode; the conflict receipt remains immutable evidence. |
 
 The journal remains a mutable transaction checkpoint. The ledger validates
