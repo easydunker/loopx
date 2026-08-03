@@ -180,5 +180,25 @@ def test_target_capability_is_repair_output_instead_of_prerequisite() -> None:
     assert gate["runnable_candidates"][0]["capability_repair_mode"] is True
 
 
-def test_requirement_free_candidate_does_not_invent_capability_gate() -> None:
-    assert _gate({"executable_backlog_items": [_todo("todo_plain", index=1)]}) is None
+def test_requirement_free_candidate_emits_explicit_empty_run_gate() -> None:
+    gate = build_capability_gate(
+        {"executable_backlog_items": [_todo("todo_plain", index=1)]},
+        available_capabilities=[],
+        emit_empty_run_gate=True,
+    )
+
+    assert gate is not None
+    assert gate["action"] == "run"
+    assert set(gate) == {"action"}
+
+
+def test_enforce_eligible_decision_can_emit_explicit_empty_run_gate() -> None:
+    gate = build_capability_gate(
+        None,
+        available_capabilities=[],
+        emit_empty_run_gate=True,
+    )
+
+    assert gate is not None
+    assert gate["action"] == "run"
+    assert set(gate) == {"action"}

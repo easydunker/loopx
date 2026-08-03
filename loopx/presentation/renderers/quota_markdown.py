@@ -392,7 +392,7 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
                 f"{automation_prompt_upgrade.get('completion_command')}"
             )
     capability_gate = as_dict(payload.get("capability_gate"))
-    if capability_gate:
+    if capability_gate and capability_gate != {"action": "run"}:
         lines.append(
             "- capability_gate: "
             f"action={capability_gate.get('action')} "

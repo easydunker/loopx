@@ -148,6 +148,8 @@ def build_turn_promotion_attestation(
         raise ValueError("; ".join(result_validation["errors"]))
     envelope = _mapping(plan.get("turn_envelope"))
     boundary = _mapping(envelope.get("boundary"))
+    if not isinstance(boundary.get("capability_gate"), Mapping):
+        raise ValueError("Turn promotion requires an explicit capability gate")
     gate = _mapping(boundary.get("capability_gate"))
     action = _mapping(envelope.get("action"))
     selected_todo = _mapping(action.get("selected_todo"))
@@ -166,7 +168,7 @@ def build_turn_promotion_attestation(
         gate.get("missing_capabilities"),
     )
     if (
-        (gate and gate.get("action") != "run")
+        gate.get("action") != "run"
         or missing
         or not set(required).issubset(available)
     ):

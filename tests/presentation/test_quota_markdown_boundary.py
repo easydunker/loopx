@@ -41,6 +41,19 @@ def test_quota_rendering_preserves_the_decision_payload() -> None:
     assert payload == original
 
 
+def test_quota_rendering_omits_explicit_empty_capability_gate_detail() -> None:
+    markdown = render_quota_should_run_markdown(
+        {
+            "goal_id": "presentation-boundary",
+            "decision": "run",
+            "should_run": True,
+            "capability_gate": {"action": "run"},
+        }
+    )
+
+    assert "capability_gate" not in markdown
+
+
 def test_quota_rendering_reuses_the_fallback_projection_contract() -> None:
     payload = {
         "blocked_priority_fallback": {

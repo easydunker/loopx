@@ -27,7 +27,7 @@ class GrowthAllowance:
 _GROWTH_ALLOWANCE_BY_POLICY: dict[str, GrowthAllowance] = {
     "absolute_hot_path": GrowthAllowance(
         ratio=0.005,
-        json={"chars": 64, "utf8_bytes": 128, "lines": 2, "compact_payload_chars": 64},
+        json={"chars": 64, "utf8_bytes": 128, "lines": 3, "compact_payload_chars": 64},
         markdown={
             "chars": 32,
             "utf8_bytes": 64,

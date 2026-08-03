@@ -224,6 +224,34 @@ def test_turn_envelope_projects_promotion_capability_and_write_authority() -> No
     assert envelope["action_signature"]["matches"] is True
 
 
+def test_turn_envelope_rejects_capability_lists_that_cannot_be_projected_whole() -> None:
+    source = _full_decision()
+    capabilities = [f"capability_{index}" for index in range(33)]
+    source["capability_gate"] = {
+        "action": "run",
+        "required": capabilities,
+        "available": capabilities,
+        "missing": [],
+    }
+
+    with pytest.raises(ValueError, match="required_capabilities exceeds the 32-item"):
+        build_turn_envelope(source)
+
+
+def test_turn_envelope_keeps_explicit_empty_capability_gate_compact() -> None:
+    source = _full_decision()
+    source["capability_gate"] = {
+        "action": "run",
+        "required": [],
+        "available": [],
+        "missing": [],
+    }
+
+    envelope = build_turn_envelope(source)
+
+    assert envelope["boundary"]["capability_gate"] == {"action": "run"}
+
+
 @pytest.mark.parametrize(
     "case",
     STATE_MATRIX["cases"],

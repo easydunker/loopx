@@ -1569,7 +1569,7 @@ def build_quota_should_run(
                 monitor_debt_arbitration=monitor_debt_arbitration,
             )
         )
-        capability_gate, capability_monitor_contract, capability_monitor_fallback = build_capability_gate_with_monitor_fallback(agent_todo_summary, available_capabilities=effective_available_capabilities, agent_identity=agent_identity, monitor_item_limit=MONITOR_DUE_ITEM_LIMIT)
+        capability_gate, capability_monitor_contract, capability_monitor_fallback = build_capability_gate_with_monitor_fallback(agent_todo_summary, available_capabilities=effective_available_capabilities, agent_identity=agent_identity, monitor_item_limit=MONITOR_DUE_ITEM_LIMIT, emit_empty_run_gate=normal_delivery_allowed)
         if task_orchestration_contract:
             capability_monitor_contract = capability_monitor_fallback = None
         work_lane_contract = capability_monitor_contract or work_lane_contract

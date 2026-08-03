@@ -282,6 +282,18 @@ def test_promotion_attestation_binds_capabilities_and_boundary_authority() -> No
     )
     assert validate_turn_promotion_attestation(tampered)["ok"] is False
 
+    missing_gate_plan = json.loads(json.dumps(plan))
+    missing_gate_plan["turn_envelope"]["boundary"].pop("capability_gate")
+    with pytest.raises(ValueError, match="requires an explicit capability gate"):
+        build_turn_promotion_attestation(
+            missing_gate_plan,
+            record,
+            [
+                _capability_observation("shell"),
+                _capability_observation("filesystem_write"),
+            ],
+        )
+
 
 def test_enforce_mode_requires_explicit_capability_observations_before_effects(
     tmp_path: Path,
@@ -341,6 +353,43 @@ def test_enforce_mode_requires_explicit_capability_observations_before_effects(
     assert [row["schema_version"] for row in ledger].count(
         TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION
     ) == 1
+
+
+def test_enforce_replay_validates_attestation_against_committed_plan(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(required_capabilities=("shell",))
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    kwargs = {
+        "host_runner": lambda _request: _host_result(plan),
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "task_validator": _passing_validator,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+        "reconciliation_mode": "enforce",
+        "observe_revision": lambda: "sha256:fixture",
+        "capability_observations": [_capability_observation("shell")],
+    }
+
+    first = run_loopx_turn_once(plan, **kwargs)
+    changed_plan = json.loads(json.dumps(plan))
+    changed_plan["turn_envelope"]["boundary"]["write_scope"] = ["loopx/**"]
+    replay = run_loopx_turn_once(changed_plan, **kwargs)
+
+    assert replay["replayed"] is True
+    assert not any(replay["effects"].values())
+    assert replay["result_record"]["record_id"] == first["result_record"]["record_id"]
+    assert (
+        replay["promotion_attestation"]["attestation_id"]
+        == first["promotion_attestation"]["attestation_id"]
+    )
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
 
 
 def test_semantic_review_request_is_bounded_to_changed_pre_effect_revision() -> None:

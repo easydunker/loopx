@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from hashlib import sha256
 from typing import Any
@@ -22,6 +23,8 @@ TURN_ENVELOPE_BUDGET_BYTES = 8_192
 EXECUTABLE_CLI_ARGS_MAX_ITEMS = 64
 EXECUTABLE_CLI_ARGS_MAX_ITEM_CHARS = 512
 EXECUTABLE_CLI_ARGS_MAX_TOTAL_CHARS = 2_048
+CAPABILITY_GATE_MAX_ITEMS = 32
+CAPABILITY_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
 SCHEDULER_DETAIL_REQUEST = "loopx quota should-run --include-detail scheduler"
 CONTRACT_CAPSULE_SCHEMA_VERSION = "loopx_contract_capsule_v0"
 ACTION_SIGNATURE_SCHEMA_VERSION = "loopx_action_signature_v0"
@@ -154,6 +157,31 @@ def _text_list(value: Any, *, limit: int, item_limit: int = 240) -> list[str]:
         result.append(text)
         if len(result) >= limit:
             break
+    return result
+
+
+def _capability_list(value: Any, *, field: str) -> list[str]:
+    """Project one complete bounded capability list without lossy compaction."""
+
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"capability_gate.{field} must be a list")
+    if len(value) > CAPABILITY_GATE_MAX_ITEMS:
+        raise ValueError(
+            f"capability_gate.{field} exceeds the "
+            f"{CAPABILITY_GATE_MAX_ITEMS}-item Turn envelope limit"
+        )
+    result: list[str] = []
+    for item in value:
+        capability = str(item or "").strip()
+        if not CAPABILITY_TOKEN_RE.fullmatch(capability):
+            raise ValueError(
+                f"capability_gate.{field} must contain public-safe capability tokens"
+            )
+        if capability in result:
+            raise ValueError(f"capability_gate.{field} must be unique")
+        result.append(capability)
     return result
 
 
@@ -372,17 +400,18 @@ def _boundary(payload: Mapping[str, Any]) -> dict[str, Any]:
             for field in ("action", "reason", "owner_action")
             if capability_gate.get(field) is not None
         }
+        capability_lists: dict[str, list[str]] = {}
         for source_field, target_field in (
             ("required", "required_capabilities"),
             ("available", "available_capabilities"),
             ("missing", "missing_capabilities"),
         ):
-            values = _text_list(
+            capability_lists[target_field] = _capability_list(
                 capability_gate.get(source_field, capability_gate.get(target_field)),
-                limit=32,
-                item_limit=80,
+                field=target_field,
             )
-            compact_gate[target_field] = values
+        if any(capability_lists.values()):
+            compact_gate.update(capability_lists)
         boundary["capability_gate"] = compact_gate
     return boundary
 

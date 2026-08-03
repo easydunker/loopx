@@ -513,24 +513,35 @@ def _build_blocked_capability_gate(
     }
 
 
+def _build_empty_capability_gate() -> dict[str, Any]:
+    return {"action": "run"}
+
+
 def build_capability_gate(
     agent_todo_summary: dict[str, Any] | None,
     *,
     available_capabilities: list[str],
     agent_identity: dict[str, Any] | None = None,
+    emit_empty_run_gate: bool = False,
 ) -> dict[str, Any] | None:
     if not isinstance(agent_todo_summary, dict):
-        return None
-    candidates, source = _collect_capability_gate_candidates(agent_todo_summary)
+        candidates: list[dict[str, Any]] = []
+        source = "quota.enforce_eligible_decision"
+    else:
+        candidates, source = _collect_capability_gate_candidates(agent_todo_summary)
+    available = available_capabilities_with_defaults(available_capabilities)
     if not candidates:
+        if emit_empty_run_gate:
+            return _build_empty_capability_gate()
         return None
 
-    available = available_capabilities_with_defaults(available_capabilities)
     blocked, runnable, saw_requirement = _match_capability_candidates(
         candidates,
         available_capabilities=available,
     )
     if not saw_requirement and not blocked:
+        if emit_empty_run_gate:
+            return _build_empty_capability_gate()
         return None
     if runnable:
         return _build_runnable_capability_gate(

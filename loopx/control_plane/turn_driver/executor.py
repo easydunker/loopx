@@ -871,8 +871,11 @@ def _execution_payload(
             raise ValueError("LoopX Turn journal promotion attestation failed validation")
         if result_record is None:
             raise ValueError("LoopX Turn promotion attestation has no result record")
+        journal_plan = journal.get("plan")
+        if not isinstance(journal_plan, Mapping):
+            raise ValueError("LoopX Turn promotion attestation has no journal plan")
         expected_attestation = build_turn_promotion_attestation(
-            plan,
+            journal_plan,
             result_record,
             promotion_attestation.get("capability_observations") or [],
         )
