@@ -17,6 +17,14 @@ from ...file_lock import exclusive_file_lock
 from ..goals.goal_vision import normalize_goal_vision_packet
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
 from ..work_items.delivery_outcome import require_delivery_outcome
+from .capability_attestations import (
+    build_turn_promotion_attestation,
+    validate_turn_promotion_attestation,
+)
+from .result_ledger import (
+    append_turn_result_ledger_records,
+    turn_result_ledger_path,
+)
 from .result_records import (
     build_turn_reconciliation_receipt,
     build_turn_result_record,
@@ -26,17 +34,12 @@ from .result_records import (
     validate_turn_result_record,
     validate_turn_semantic_review_request,
 )
-from .result_ledger import (
-    append_turn_result_ledger_records,
-    turn_result_ledger_path,
-)
 from .transaction import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
     TRANSACTION_PHASES,
     LoopXTurnResultKind,
     validate_loopx_turn_receipt,
 )
-
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION = "loopx_turn_host_request_v0"
 LOOPX_TURN_EXECUTION_SCHEMA_VERSION = "loopx_turn_execution_v0"
@@ -812,6 +815,11 @@ def _execution_payload(
         if isinstance(journal.get("semantic_review_request"), dict)
         else None
     )
+    promotion_attestation = (
+        dict(journal["promotion_attestation"])
+        if isinstance(journal.get("promotion_attestation"), dict)
+        else None
+    )
     if (
         result_record is not None
         and not validate_turn_result_record(result_record)["ok"]
@@ -858,6 +866,26 @@ def _execution_payload(
             != proposed_effect_ids
         ):
             raise ValueError("LoopX Turn semantic review request has invalid lineage")
+    if promotion_attestation is not None:
+        if not validate_turn_promotion_attestation(promotion_attestation)["ok"]:
+            raise ValueError("LoopX Turn journal promotion attestation failed validation")
+        if result_record is None:
+            raise ValueError("LoopX Turn promotion attestation has no result record")
+        expected_attestation = build_turn_promotion_attestation(
+            plan,
+            result_record,
+            promotion_attestation.get("capability_observations") or [],
+        )
+        if (
+            promotion_attestation.get("result_record_id")
+            != result_record.get("record_id")
+            or promotion_attestation.get("turn_key") != result_record.get("turn_key")
+            or promotion_attestation.get("attested_effect_ids")
+            != _proposed_effect_ids(result_record)
+            or promotion_attestation.get("attestation_id")
+            != expected_attestation.get("attestation_id")
+        ):
+            raise ValueError("LoopX Turn promotion attestation has invalid lineage")
     quota_spent = effects.get("quota_spent") is True or "quota_spend" in list(
         journal.get("completed_phases") or []
     )
@@ -887,6 +915,7 @@ def _execution_payload(
         "shadow_reconciliation_receipt": (shadow_reconciliation_receipt),
         "enforced_reconciliation_receipt": enforced_reconciliation_receipt,
         "semantic_review_request": semantic_review_request,
+        "promotion_attestation": promotion_attestation,
         "reconciliation_mode": journal.get("reconciliation_mode", "shadow"),
         "result_ledger": (
             dict(journal["result_ledger"])
@@ -1234,6 +1263,7 @@ def _enforcement_revision_stage(
     effects: dict[str, bool],
     observe_revision: RevisionObserver | None,
     semantic_escalation: bool,
+    capability_observations: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any] | None:
     if "durable_writeback" in completed_phases:
         if not str(journal.get("reconciliation_observed_revision") or ""):
@@ -1245,14 +1275,34 @@ def _enforcement_revision_stage(
         raise ValueError(
             "enforced mechanical reconciliation requires a revision observer"
         )
-    observed_revision = str(observe_revision() or "")
-    if not observed_revision:
-        raise ValueError("mechanical reconciliation observed an empty revision")
     result_record = (
         dict(journal["result_record"])
         if isinstance(journal.get("result_record"), dict)
         else {}
     )
+    promotion_attestation = (
+        dict(journal["promotion_attestation"])
+        if isinstance(journal.get("promotion_attestation"), dict)
+        else build_turn_promotion_attestation(
+            plan,
+            result_record,
+            capability_observations,
+        )
+    )
+    validation = validate_turn_promotion_attestation(promotion_attestation)
+    if not validation["ok"]:
+        raise ValueError("; ".join(validation["errors"]))
+    journal.update(
+        promotion_attestation=promotion_attestation,
+        result_ledger=append_turn_result_ledger_records(
+            result_ledger_path,
+            [promotion_attestation],
+        ),
+    )
+    _write_journal(journal_path, journal)
+    observed_revision = str(observe_revision() or "")
+    if not observed_revision:
+        raise ValueError("mechanical reconciliation observed an empty revision")
     expected_revision = str(result_record.get("based_on_revision") or "")
     journal["reconciliation_observed_revision"] = observed_revision
     if observed_revision == expected_revision:
@@ -1311,6 +1361,7 @@ def _transaction_closeout_stage(
     reconciliation_mode: str,
     observe_revision: RevisionObserver | None,
     semantic_escalation: bool,
+    capability_observations: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     if reconciliation_mode == "enforce":
         blocked = _enforcement_revision_stage(
@@ -1323,6 +1374,7 @@ def _transaction_closeout_stage(
             effects=effects,
             observe_revision=observe_revision,
             semantic_escalation=semantic_escalation,
+            capability_observations=capability_observations,
         )
         if blocked is not None:
             return blocked
@@ -1492,6 +1544,7 @@ def run_loopx_turn_once(
     reconciliation_mode: str = "shadow",
     observe_revision: RevisionObserver | None = None,
     semantic_escalation: bool = False,
+    capability_observations: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     if reconciliation_mode not in TURN_RECONCILIATION_MODES:
         raise ValueError("unsupported Turn reconciliation mode")
@@ -1666,4 +1719,5 @@ def run_loopx_turn_once(
                 reconciliation_mode=reconciliation_mode,
                 observe_revision=observe_revision,
                 semantic_escalation=semantic_escalation,
+                capability_observations=capability_observations,
             )

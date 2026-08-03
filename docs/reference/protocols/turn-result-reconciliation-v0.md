@@ -12,6 +12,7 @@ The split is:
 host candidate
     -> immutable result record
     -> independent validation
+    -> capability and boundary attestation (enforce mode)
     -> reconciliation receipt
     -> canonical todo/state/quota/scheduler effects
 ```
@@ -21,9 +22,13 @@ receipt into both the existing per-Turn journal and a goal-scoped append-only
 runtime ledger. The default `shadow` mode keeps the existing direct writeback
 path and appends a separate `shadow_match` or `shadow_conflict` observation.
 The opt-in `enforce` mode checks the live action revision before the first
-effect, resumes only from its journaled checked revision, and appends an
-`applied` receipt after the complete effect sequence. The callbacks remain the
-canonical effect providers; semantic review remains a later stage.
+effect. Before that revision check it requires one explicit public-safe
+`turn_capability_observation_v0` for every capability that admitted the selected
+todo, binds those observations and the projected write authority into an
+immutable `turn_promotion_attestation_v0`, and appends it to the result ledger.
+It then resumes only from its journaled checked revision and appends an `applied`
+receipt after the complete effect sequence. The callbacks remain the canonical
+effect providers; semantic review remains a later stage.
 
 Enforce mode may additionally opt into `--semantic-escalation`. This does not
 let a semantic reviewer apply effects. When the live revision changed before
@@ -165,6 +170,65 @@ payload. They are idempotency identities, not grants of authority. A
 reconciler still checks validation, current revision, todo lifecycle, write
 scope, capabilities, user gates, and repository policy.
 
+## `turn_promotion_attestation_v0`
+
+Enforce mode does not promote a result from a bare `--available-capability`
+claim. Its caller must supply one observation per required capability:
+
+```json
+{
+  "schema_version": "turn_capability_observation_v0",
+  "capability": "filesystem_write",
+  "provider_id": "managed-codex-host",
+  "verification_kind": "host-policy-readback",
+  "evidence_ref": "sha256:<public-receipt-digest>"
+}
+```
+
+The observation is intentionally small. `provider_id` identifies the host or
+tool provider that performed the verification; `verification_kind` names the
+check; and `evidence_ref` points to public-safe evidence without embedding raw
+logs, credentials, private paths, or trajectories. An observation is scoped to
+the current Turn only because the resulting attestation binds it to the Turn
+and result identities. Installing a skill or declaring a capability is not an
+observation by itself.
+
+After exact capability coverage and write-scope containment pass, LoopX writes:
+
+```json
+{
+  "schema_version": "turn_promotion_attestation_v0",
+  "attestation_id": "sha256:<canonical-attestation-content>",
+  "result_record_id": "sha256:<canonical-result-content>",
+  "turn_key": "sha256:<turn-transaction-identity>",
+  "required_capabilities": ["filesystem_write"],
+  "capability_observations": [
+    {
+      "schema_version": "turn_capability_observation_v0",
+      "capability": "filesystem_write",
+      "provider_id": "managed-codex-host",
+      "verification_kind": "host-policy-readback",
+      "evidence_ref": "sha256:<public-receipt-digest>"
+    }
+  ],
+  "authority_evidence": {
+    "source": "turn_envelope_action_boundary",
+    "action_revision": "sha256:<quota-decision>",
+    "action_signature_hash": "sha256:<action-signature>",
+    "boundary_hash": "sha256:<projected-boundary>",
+    "required_write_scopes": ["loopx/control_plane/**"],
+    "allowed_write_scopes": ["loopx/**"]
+  },
+  "attested_effect_ids": ["sha256:<effect-id>"]
+}
+```
+
+Use repeatable `--capability-attestation-json '<object>'` arguments with
+`turn run-once --reconciliation-mode enforce`. Missing, duplicate, extra,
+private-looking, or out-of-bound evidence fails before writeback, quota spend,
+or scheduler callbacks. Shadow mode remains unchanged and does not require
+attestations.
+
 ## `turn_reconciliation_receipt_v0`
 
 ```json
@@ -246,6 +310,8 @@ validated result and reconciliation observations:
 | Direct path completes | Shadow reconciliation appends a `shadow_match` receipt covering the proposed effect sequence. |
 | Direct path stops partway | Shadow reconciliation appends a `shadow_conflict` receipt covering only the observed effect prefix. |
 | Enforced path sees the expected revision | The journal freezes the observed revision before effects and appends an `applied` receipt only after the complete effect sequence. |
+| Enforced path lacks explicit capability evidence | No callback runs; promotion fails before revision observation or canonical effects. |
+| Enforced path has complete capability evidence | One immutable promotion attestation binds provider observations, action lineage, write scopes, and proposed effect ids before revision reconciliation. |
 | Enforced path sees a stale revision | No callback runs; a `revision_conflict` receipt is appended and the Turn becomes `reconciliation_blocked`. |
 | Enforced path sees a stale revision with semantic escalation enabled | The same fail-closed conflict is retained and one immutable ambiguity request is appended; no callback runs. |
 | Enforced path resumes after a committed phase | The journaled checked revision is reused and already completed callbacks are not repeated. |

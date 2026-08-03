@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from ...file_lock import exclusive_file_lock
+from .capability_attestations import (
+    TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION,
+    validate_turn_promotion_attestation,
+)
 from .result_records import (
     TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,
     TURN_RESULT_RECORD_SCHEMA_VERSION,
@@ -17,7 +21,6 @@ from .result_records import (
     validate_turn_result_record,
     validate_turn_semantic_review_request,
 )
-
 
 TURN_RESULT_LEDGER_APPEND_SCHEMA_VERSION = "turn_result_ledger_append_v0"
 
@@ -41,6 +44,9 @@ def _record_identity(value: Mapping[str, Any]) -> tuple[str, str]:
     elif schema_version == TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION:
         validation = validate_turn_semantic_review_request(value)
         identity = str(value.get("request_id") or "")
+    elif schema_version == TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION:
+        validation = validate_turn_promotion_attestation(value)
+        identity = str(value.get("attestation_id") or "")
     else:
         raise ValueError("Turn result ledger row has an unsupported schema")
     if not validation["ok"]:
@@ -65,6 +71,26 @@ def _validate_semantic_request_lineage(
         raise ValueError(
             "Turn semantic review request does not match its result record"
         )
+
+
+def _validate_promotion_attestation_lineage(
+    attestation: Mapping[str, Any],
+    result_record: Mapping[str, Any],
+) -> None:
+    proposed_effect_ids = [
+        str(effect.get("effect_id") or "")
+        for effect in result_record.get("proposed_effects") or []
+        if isinstance(effect, Mapping)
+    ]
+    if (
+        attestation.get("turn_key") != result_record.get("turn_key")
+        or (
+            attestation.get("authority_evidence") or {}
+        ).get("action_revision")
+        != result_record.get("based_on_revision")
+        or attestation.get("attested_effect_ids") != proposed_effect_ids
+    ):
+        raise ValueError("Turn promotion attestation does not match its result record")
 
 
 def _complete_ledger_text(path: Path) -> tuple[str, int]:
@@ -124,12 +150,22 @@ def read_turn_result_ledger(path: Path) -> list[dict[str, Any]]:
                 == TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION
             ):
                 raise ValueError("Turn result ledger receipt has no result record")
+            if (
+                receipt.get("schema_version")
+                == TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION
+            ):
+                raise ValueError("Turn promotion attestation has no result record")
             raise ValueError("Turn semantic review request has no result record")
         if (
             receipt.get("schema_version")
             == TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
         ):
             _validate_semantic_request_lineage(receipt, result_record)
+        elif (
+            receipt.get("schema_version")
+            == TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION
+        ):
+            _validate_promotion_attestation_lineage(receipt, result_record)
     return rows
 
 
@@ -189,6 +225,14 @@ def append_turn_result_ledger_records(
             == TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
         ):
             raise ValueError("Turn semantic review request has no result record")
+        if any(
+            str(candidate.get("result_record_id") or "")
+            not in known_result_records
+            for candidate in candidates
+            if candidate.get("schema_version")
+            == TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION
+        ):
+            raise ValueError("Turn promotion attestation has no result record")
         for candidate in candidates:
             if (
                 candidate.get("schema_version")
@@ -199,6 +243,16 @@ def append_turn_result_ledger_records(
                 str(candidate.get("result_record_id") or "")
             ]
             _validate_semantic_request_lineage(candidate, result_record)
+        for candidate in candidates:
+            if (
+                candidate.get("schema_version")
+                != TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION
+            ):
+                continue
+            result_record = known_result_records[
+                str(candidate.get("result_record_id") or "")
+            ]
+            _validate_promotion_attestation_lineage(candidate, result_record)
 
         appended: list[tuple[str, str]] = []
         reused: list[tuple[str, str]] = []

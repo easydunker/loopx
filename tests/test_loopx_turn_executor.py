@@ -11,12 +11,15 @@ import pytest
 
 from loopx.control_plane.turn_driver import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
+    TURN_CAPABILITY_OBSERVATION_SCHEMA_VERSION,
+    TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION,
     TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,
     TURN_RESULT_LEDGER_APPEND_SCHEMA_VERSION,
     TURN_RESULT_RECORD_SCHEMA_VERSION,
     TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION,
     append_turn_result_ledger_records,
     build_loopx_turn_plan,
+    build_turn_promotion_attestation,
     build_turn_reconciliation_receipt,
     build_turn_result_record,
     build_turn_semantic_review_request,
@@ -25,6 +28,7 @@ from loopx.control_plane.turn_driver import (
     read_turn_result_ledger,
     run_loopx_turn_once,
     validate_loopx_turn_host_result,
+    validate_turn_promotion_attestation,
     validate_turn_reconciliation_receipt,
     validate_turn_result_record,
     validate_turn_semantic_review_request,
@@ -42,7 +46,11 @@ def _content_hash(payload: dict[str, object]) -> str:
     return "sha256:" + sha256(encoded).hexdigest()
 
 
-def _plan(*, turn_instance_id: str | None = None) -> dict[str, object]:
+def _plan(
+    *,
+    turn_instance_id: str | None = None,
+    required_capabilities: tuple[str, ...] = (),
+) -> dict[str, object]:
     return build_loopx_turn_plan(
         {
             "ok": True,
@@ -58,6 +66,16 @@ def _plan(*, turn_instance_id: str | None = None) -> dict[str, object]:
                 "selected_todo": {
                     "todo_id": "todo_fixture0001",
                     "text": "Advance one public fixture",
+                    "required_write_scopes": ["docs/**"],
+                },
+            },
+            "boundary": {
+                "write_scope": ["docs/**"],
+                "capability_gate": {
+                    "action": "run",
+                    "required_capabilities": list(required_capabilities),
+                    "available_capabilities": list(required_capabilities),
+                    "missing_capabilities": [],
                 },
             },
             "user": {
@@ -78,6 +96,16 @@ def _plan(*, turn_instance_id: str | None = None) -> dict[str, object]:
         execution_mode="isolated-headless",
         turn_instance_id=turn_instance_id,
     )
+
+
+def _capability_observation(capability: str) -> dict[str, str]:
+    return {
+        "schema_version": TURN_CAPABILITY_OBSERVATION_SCHEMA_VERSION,
+        "capability": capability,
+        "provider_id": "fixture-host",
+        "verification_kind": "fixture-probe",
+        "evidence_ref": f"fixture:{capability}:verified",
+    }
 
 
 def _host_result(
@@ -227,6 +255,92 @@ def test_result_and_reconciliation_records_have_stable_content_identity() -> Non
             status="applied",
             applied_effect_ids=[effect_id, effect_id],
         )
+
+
+def test_promotion_attestation_binds_capabilities_and_boundary_authority() -> None:
+    plan = _plan(required_capabilities=("filesystem_write", "shell"))
+    record = build_turn_result_record(plan, _host_result(plan))
+
+    attestation = build_turn_promotion_attestation(
+        plan,
+        record,
+        [_capability_observation("shell"), _capability_observation("filesystem_write")],
+    )
+
+    assert attestation["schema_version"] == TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION
+    assert attestation["required_capabilities"] == ["filesystem_write", "shell"]
+    assert attestation["authority_evidence"]["required_write_scopes"] == ["docs/**"]
+    assert attestation["authority_evidence"]["allowed_write_scopes"] == ["docs/**"]
+    assert attestation["attested_effect_ids"] == [
+        effect["effect_id"] for effect in record["proposed_effects"]
+    ]
+    assert validate_turn_promotion_attestation(attestation)["ok"] is True
+    tampered = json.loads(json.dumps(attestation))
+    tampered["authority_evidence"]["raw_log"] = "not part of the public contract"
+    tampered["attestation_id"] = _content_hash(
+        {key: value for key, value in tampered.items() if key != "attestation_id"}
+    )
+    assert validate_turn_promotion_attestation(tampered)["ok"] is False
+
+
+def test_enforce_mode_requires_explicit_capability_observations_before_effects(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(required_capabilities=("shell",))
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    revision_observations = {"count": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def observe_revision() -> str:
+        revision_observations["count"] += 1
+        return "sha256:fixture"
+
+    with pytest.raises(ValueError, match="one explicit observation"):
+        run_loopx_turn_once(
+            plan,
+            host_runner=lambda _request: _host_result(plan),
+            project=tmp_path,
+            runtime_root=tmp_path / "runtime",
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            reconciliation_mode="enforce",
+            observe_revision=observe_revision,
+        )
+
+    assert revision_observations["count"] == 0
+
+    payload = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: _host_result(plan),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback,
+        spend=spend,
+        scheduler=scheduler,
+        reconciliation_mode="enforce",
+        observe_revision=observe_revision,
+        capability_observations=[_capability_observation("shell")],
+    )
+
+    assert payload["status"] == "committed"
+    assert payload["promotion_attestation"]["required_capabilities"] == ["shell"]
+    assert revision_observations["count"] == 1
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+    ledger = read_turn_result_ledger(
+        tmp_path / "runtime" / "goals" / "fixture-goal" / "turn-result-ledger.jsonl"
+    )
+    assert [row["schema_version"] for row in ledger].count(
+        TURN_PROMOTION_ATTESTATION_SCHEMA_VERSION
+    ) == 1
 
 
 def test_semantic_review_request_is_bounded_to_changed_pre_effect_revision() -> None:

@@ -17,7 +17,6 @@ from ..work_items.interaction_contract import (
 )
 from ..work_items.primary_action import protocol_action_text
 
-
 TURN_ENVELOPE_SCHEMA_VERSION = "loopx_turn_envelope_v0"
 TURN_ENVELOPE_BUDGET_BYTES = 8_192
 EXECUTABLE_CLI_ARGS_MAX_ITEMS = 64
@@ -267,6 +266,10 @@ def _selected_todo(
         "confidence",
     )
     compact = {field: source[field] for field in fields if source.get(field) is not None}
+    for field in ("required_write_scopes", "required_capabilities"):
+        values = _text_list(source.get(field), limit=16, item_limit=180)
+        if values:
+            compact[field] = values
     text = _text(source.get("text"), limit=360)
     if text and _same_action_text(source.get("text"), recommended_action):
         compact["text_ref"] = "action.recommended_action"
@@ -364,17 +367,23 @@ def _boundary(payload: Mapping[str, Any]) -> dict[str, Any]:
         boundary["workspace_guard"] = workspace_guard
     capability_gate = _mapping(payload.get("capability_gate"))
     if capability_gate:
-        boundary["capability_gate"] = {
+        compact_gate = {
             field: capability_gate[field]
-            for field in (
-                "action",
-                "reason",
-                "required_capabilities",
-                "missing_capabilities",
-                "owner_action",
-            )
+            for field in ("action", "reason", "owner_action")
             if capability_gate.get(field) is not None
         }
+        for source_field, target_field in (
+            ("required", "required_capabilities"),
+            ("available", "available_capabilities"),
+            ("missing", "missing_capabilities"),
+        ):
+            values = _text_list(
+                capability_gate.get(source_field, capability_gate.get(target_field)),
+                limit=32,
+                item_limit=80,
+            )
+            compact_gate[target_field] = values
+        boundary["capability_gate"] = compact_gate
     return boundary
 
 
