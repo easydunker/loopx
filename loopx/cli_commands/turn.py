@@ -161,6 +161,14 @@ def register_turn_commands(
         ),
     )
     run_once.add_argument(
+        "--semantic-escalation",
+        action="store_true",
+        help=(
+            "When enforce mode detects a changed revision before effects, append "
+            "a bounded semantic review request without applying any effect."
+        ),
+    )
+    run_once.add_argument(
         "--resume-turn-key",
         help="Resume the exact journaled transaction without recomputing its plan.",
     )
@@ -625,6 +633,7 @@ def handle_turn_command(
                     if args.execute and args.reconciliation_mode == "enforce"
                     else None
                 ),
+                semantic_escalation=args.semantic_escalation,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")

@@ -20,9 +20,11 @@ from ..work_items.delivery_outcome import require_delivery_outcome
 from .result_records import (
     build_turn_reconciliation_receipt,
     build_turn_result_record,
+    build_turn_semantic_review_request,
     build_turn_shadow_reconciliation_receipt,
     validate_turn_reconciliation_receipt,
     validate_turn_result_record,
+    validate_turn_semantic_review_request,
 )
 from .result_ledger import (
     append_turn_result_ledger_records,
@@ -805,6 +807,11 @@ def _execution_payload(
         if isinstance(journal.get("enforced_reconciliation_receipt"), dict)
         else None
     )
+    semantic_review_request = (
+        dict(journal["semantic_review_request"])
+        if isinstance(journal.get("semantic_review_request"), dict)
+        else None
+    )
     if (
         result_record is not None
         and not validate_turn_result_record(result_record)["ok"]
@@ -831,6 +838,26 @@ def _execution_payload(
             result_record,
             label=receipt_name,
         )
+    if (
+        semantic_review_request is not None
+        and not validate_turn_semantic_review_request(semantic_review_request)["ok"]
+    ):
+        raise ValueError("LoopX Turn journal semantic review request failed validation")
+    if semantic_review_request is not None:
+        if result_record is None:
+            raise ValueError("LoopX Turn semantic review request has no result record")
+        proposed_effect_ids = _proposed_effect_ids(result_record)
+        if (
+            semantic_review_request.get("result_record_id")
+            != result_record.get("record_id")
+            or semantic_review_request.get("turn_key")
+            != result_record.get("turn_key")
+            or semantic_review_request.get("expected_revision")
+            != result_record.get("based_on_revision")
+            or semantic_review_request.get("proposed_effect_ids")
+            != proposed_effect_ids
+        ):
+            raise ValueError("LoopX Turn semantic review request has invalid lineage")
     quota_spent = effects.get("quota_spent") is True or "quota_spend" in list(
         journal.get("completed_phases") or []
     )
@@ -859,6 +886,7 @@ def _execution_payload(
         "reconciliation_receipt": reconciliation_receipt,
         "shadow_reconciliation_receipt": (shadow_reconciliation_receipt),
         "enforced_reconciliation_receipt": enforced_reconciliation_receipt,
+        "semantic_review_request": semantic_review_request,
         "reconciliation_mode": journal.get("reconciliation_mode", "shadow"),
         "result_ledger": (
             dict(journal["result_ledger"])
@@ -1205,6 +1233,7 @@ def _enforcement_revision_stage(
     result_ledger_path: Path,
     effects: dict[str, bool],
     observe_revision: RevisionObserver | None,
+    semantic_escalation: bool,
 ) -> dict[str, Any] | None:
     if "durable_writeback" in completed_phases:
         if not str(journal.get("reconciliation_observed_revision") or ""):
@@ -1238,6 +1267,19 @@ def _enforcement_revision_stage(
         observed_revision=observed_revision,
         reason="canonical_action_revision_changed_before_effects",
     )
+    if semantic_escalation:
+        request = build_turn_semantic_review_request(
+            result_record,
+            ambiguity_kind="revision_changed_before_effects",
+            observed_revision=observed_revision,
+        )
+        journal.update(
+            semantic_review_request=request,
+            result_ledger=append_turn_result_ledger_records(
+                result_ledger_path,
+                [request],
+            ),
+        )
     journal.update(
         status="reconciliation_blocked",
         reconciliation_mode="enforce",
@@ -1268,6 +1310,7 @@ def _transaction_closeout_stage(
     scheduler: Scheduler,
     reconciliation_mode: str,
     observe_revision: RevisionObserver | None,
+    semantic_escalation: bool,
 ) -> dict[str, Any]:
     if reconciliation_mode == "enforce":
         blocked = _enforcement_revision_stage(
@@ -1279,6 +1322,7 @@ def _transaction_closeout_stage(
             result_ledger_path=result_ledger_path,
             effects=effects,
             observe_revision=observe_revision,
+            semantic_escalation=semantic_escalation,
         )
         if blocked is not None:
             return blocked
@@ -1447,11 +1491,14 @@ def run_loopx_turn_once(
     scheduler: Scheduler | None = None,
     reconciliation_mode: str = "shadow",
     observe_revision: RevisionObserver | None = None,
+    semantic_escalation: bool = False,
 ) -> dict[str, Any]:
     if reconciliation_mode not in TURN_RECONCILIATION_MODES:
         raise ValueError("unsupported Turn reconciliation mode")
     if reconciliation_mode == "enforce" and observe_revision is None:
         raise ValueError("enforce reconciliation mode requires observe_revision")
+    if semantic_escalation and reconciliation_mode != "enforce":
+        raise ValueError("semantic escalation requires enforce reconciliation mode")
     if host_runner is not None and host_argv is not None:
         raise ValueError("run-once accepts either host_argv or host_runner, not both")
     if host_runner is None:
@@ -1519,6 +1566,7 @@ def run_loopx_turn_once(
         ):
             journal.pop("reason", None)
             journal.pop("receipt", None)
+            journal.pop("semantic_review_request", None)
             journal["status"] = "in_progress"
             journal["reconciliation_mode"] = "shadow"
             _write_journal(journal_path, journal)
@@ -1534,6 +1582,7 @@ def run_loopx_turn_once(
                     journal.pop("result_record", None)
                     journal.pop("reconciliation_receipt", None)
                 journal.pop("result_kind", None)
+                journal.pop("semantic_review_request", None)
                 journal["completed_phases"] = (
                     list(TRANSACTION_PHASES[:2])
                     if isinstance(journal.get("host_result"), dict)
@@ -1616,4 +1665,5 @@ def run_loopx_turn_once(
                 scheduler=scheduler,
                 reconciliation_mode=reconciliation_mode,
                 observe_revision=observe_revision,
+                semantic_escalation=semantic_escalation,
             )

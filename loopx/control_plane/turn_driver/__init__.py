@@ -27,11 +27,14 @@ from .executor import (
 from .result_records import (
     TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,
     TURN_RESULT_RECORD_SCHEMA_VERSION,
+    TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION,
     build_turn_reconciliation_receipt,
     build_turn_result_record,
+    build_turn_semantic_review_request,
     build_turn_shadow_reconciliation_receipt,
     validate_turn_reconciliation_receipt,
     validate_turn_result_record,
+    validate_turn_semantic_review_request,
 )
 from .result_ledger import (
     TURN_RESULT_LEDGER_APPEND_SCHEMA_VERSION,
@@ -58,6 +61,7 @@ __all__ = [
     "LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION",
     "TURN_RESULT_RECORD_SCHEMA_VERSION",
     "TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION",
+    "TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION",
     "TURN_RESULT_LEDGER_APPEND_SCHEMA_VERSION",
     "LoopXTurnRoute",
     "LoopXTurnResultKind",
@@ -68,6 +72,7 @@ __all__ = [
     "build_turn_result_record",
     "build_turn_reconciliation_receipt",
     "build_turn_shadow_reconciliation_receipt",
+    "build_turn_semantic_review_request",
     "append_turn_result_ledger_records",
     "loopx_turn_execution_committed",
     "loopx_turn_execution_has_durable_effects",
@@ -84,6 +89,7 @@ __all__ = [
     "validate_loopx_turn_receipt",
     "validate_turn_result_record",
     "validate_turn_reconciliation_receipt",
+    "validate_turn_semantic_review_request",
     "read_turn_result_ledger",
     "turn_result_ledger_path",
 ]

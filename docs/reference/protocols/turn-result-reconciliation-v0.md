@@ -25,6 +25,13 @@ effect, resumes only from its journaled checked revision, and appends an
 `applied` receipt after the complete effect sequence. The callbacks remain the
 canonical effect providers; semantic review remains a later stage.
 
+Enforce mode may additionally opt into `--semantic-escalation`. This does not
+let a semantic reviewer apply effects. When the live revision changed before
+any effect, LoopX appends a bounded `turn_semantic_review_request_v0` that
+identifies the immutable result, both revisions, and the proposed effect ids.
+Mechanically resolved Turns, partial writebacks, invalid records, and results
+without effects never create a semantic request.
+
 Enforce-mode closeout paths share one goal-scoped reconciliation lock. This
 keeps the revision observation and effect sequence atomic relative to other
 enforced Turns for the same goal: a competing enforced Turn observes the first
@@ -200,6 +207,29 @@ Allowed statuses:
 is empty. Applied ids must always be a subset of the result record's proposed
 ids.
 
+## `turn_semantic_review_request_v0`
+
+```json
+{
+  "schema_version": "turn_semantic_review_request_v0",
+  "request_id": "sha256:<canonical-request-content>",
+  "result_record_id": "sha256:<canonical-record-content>",
+  "turn_key": "sha256:<turn-transaction-identity>",
+  "ambiguity_kind": "revision_changed_before_effects",
+  "expected_revision": "sha256:<revision-observed-before-host>",
+  "observed_revision": "sha256:<live-revision-before-effects>",
+  "proposed_effect_ids": ["sha256:<effect-id>"]
+}
+```
+
+The request is an immutable escalation packet, not a decision or authority
+receipt. Version 0 recognizes exactly one ambiguity: the canonical revision
+changed after host execution but before any proposed effect. A matching
+revision is mechanically resolved and proceeds without semantic escalation; a
+partial or completed effect sequence is recovery evidence, not semantic input.
+The request is append-only in the result ledger and remains visible if the
+blocked Turn is later rolled back to shadow mode.
+
 ## Current Behavior Characterization
 
 The per-Turn journal and exclusive sibling lock remain authoritative for
@@ -217,14 +247,16 @@ validated result and reconciliation observations:
 | Direct path stops partway | Shadow reconciliation appends a `shadow_conflict` receipt covering only the observed effect prefix. |
 | Enforced path sees the expected revision | The journal freezes the observed revision before effects and appends an `applied` receipt only after the complete effect sequence. |
 | Enforced path sees a stale revision | No callback runs; a `revision_conflict` receipt is appended and the Turn becomes `reconciliation_blocked`. |
+| Enforced path sees a stale revision with semantic escalation enabled | The same fail-closed conflict is retained and one immutable ambiguity request is appended; no callback runs. |
 | Enforced path resumes after a committed phase | The journaled checked revision is reused and already completed callbacks are not repeated. |
 | Distinct Turns race from one revision | Goal-scoped closeout serialization lets one Turn apply; the other rechecks the advanced revision and stops before callbacks. |
 | Operator rolls back a blocked enforced Turn | The same journal resumes in `shadow` mode; the conflict receipt remains immutable evidence. |
 
 The journal remains a mutable transaction checkpoint. The ledger validates
-every row before append, rejects dangling receipts and duplicate identities,
-and reuses byte-equivalent record ids on replay. A later shadow receipt never
-replaces the initial receipt or an earlier partial-path shadow observation.
+every row before append, rejects dangling linked rows, semantic-request lineage
+mismatches, and duplicate identities, and reuses byte-equivalent record ids on
+replay. A later shadow receipt never replaces the initial receipt or an earlier
+partial-path shadow observation.
 
 ## Promotion Sequence
 
@@ -237,8 +269,9 @@ replaces the initial receipt or an earlier partial-path shadow observation.
    before effects, rely on journal phase identities to avoid repeating
    completed callbacks, record the final applied effect set, and retain
    `shadow` as the explicit rollback control.
-4. **Semantic escalation**: invoke bounded semantic review only for typed
-   mechanical ambiguity.
+4. **Semantic escalation (current, opt-in request seam)**: emit a bounded
+   semantic review request only for a typed pre-effect revision ambiguity.
+   The request does not apply effects or grant authority.
 
 No stage may infer authority from a result or receipt. Benchmark launch,
 production effects, credentials, merge authority, and public publishing remain
