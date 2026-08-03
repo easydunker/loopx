@@ -18,11 +18,25 @@ host candidate
 
 This version writes the result record and a `not_attempted` or `not_required`
 receipt into both the existing per-Turn journal and a goal-scoped append-only
-runtime ledger. After the existing direct writeback path reaches a terminal
-observation, a mechanical shadow comparison appends a separate `shadow_match`
-or `shadow_conflict` receipt. It does not enforce that comparison, check the
-current revision, invoke a semantic reviewer, or add a new canonical write
-path. The existing `loopx turn run-once` callbacks remain authoritative.
+runtime ledger. The default `shadow` mode keeps the existing direct writeback
+path and appends a separate `shadow_match` or `shadow_conflict` observation.
+The opt-in `enforce` mode checks the live action revision before the first
+effect, resumes only from its journaled checked revision, and appends an
+`applied` receipt after the complete effect sequence. The callbacks remain the
+canonical effect providers; semantic review remains a later stage.
+
+Enforce-mode closeout paths share one goal-scoped reconciliation lock. This
+keeps the revision observation and effect sequence atomic relative to other
+enforced Turns for the same goal: a competing enforced Turn observes the first
+Turn's state change and fails with `revision_conflict` instead of applying from
+the same stale revision. Shadow-mode closeout retains its prior per-Turn
+journal isolation, so distinct shadow Turns can close out concurrently.
+
+Use `--reconciliation-mode enforce` to opt in. If a Turn stops with
+`reconciliation_blocked`, rerun that exact Turn with
+`--reconciliation-mode shadow` to use the explicit rollback path. Shadow
+remains the default so existing callers and benchmark adapters do not change
+behavior implicitly.
 
 ## Why Two Records
 
@@ -201,6 +215,11 @@ validated result and reconciliation observations:
 | Task validation retry | The host candidate and result record remain stable while validation is retried. |
 | Direct path completes | Shadow reconciliation appends a `shadow_match` receipt covering the proposed effect sequence. |
 | Direct path stops partway | Shadow reconciliation appends a `shadow_conflict` receipt covering only the observed effect prefix. |
+| Enforced path sees the expected revision | The journal freezes the observed revision before effects and appends an `applied` receipt only after the complete effect sequence. |
+| Enforced path sees a stale revision | No callback runs; a `revision_conflict` receipt is appended and the Turn becomes `reconciliation_blocked`. |
+| Enforced path resumes after a committed phase | The journaled checked revision is reused and already completed callbacks are not repeated. |
+| Distinct Turns race from one revision | Goal-scoped closeout serialization lets one Turn apply; the other rechecks the advanced revision and stops before callbacks. |
+| Operator rolls back a blocked enforced Turn | The same journal resumes in `shadow` mode; the conflict receipt remains immutable evidence. |
 
 The journal remains a mutable transaction checkpoint. The ledger validates
 every row before append, rejects dangling receipts and duplicate identities,
@@ -212,10 +231,12 @@ replaces the initial receipt or an earlier partial-path shadow observation.
 1. **Contract and characterization**: emit deterministic records in the
    existing journal and cover concurrency, crash recovery, replay, and
    tamper-detection behavior. Keep direct writeback unchanged.
-2. **Ledger and shadow (current)**: append records and receipts to a dedicated
+2. **Ledger and shadow**: append records and receipts to a dedicated
    immutable ledger; compare mechanical reconciliation with direct writeback.
-3. **Mechanical enforcement**: promote only after shadow parity and rollback
-   controls pass; reject stale revisions and duplicate effects.
+3. **Mechanical enforcement (current, opt-in)**: check the live action revision
+   before effects, rely on journal phase identities to avoid repeating
+   completed callbacks, record the final applied effect set, and retain
+   `shadow` as the explicit rollback control.
 4. **Semantic escalation**: invoke bounded semantic review only for typed
    mechanical ambiguity.
 

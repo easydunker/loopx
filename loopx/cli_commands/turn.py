@@ -152,6 +152,15 @@ def register_turn_commands(
         help="Retry a failed transaction from its last side-effect-safe phase.",
     )
     run_once.add_argument(
+        "--reconciliation-mode",
+        choices=["shadow", "enforce"],
+        default="shadow",
+        help=(
+            "Use shadow comparison by default, or opt in to mechanical revision "
+            "enforcement. Select shadow to roll back a revision-blocked Turn."
+        ),
+    )
+    run_once.add_argument(
         "--resume-turn-key",
         help="Resume the exact journaled transaction without recomputing its plan.",
     )
@@ -251,9 +260,7 @@ def _render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
     effects = payload.get("effects") if isinstance(payload.get("effects"), dict) else {}
     receipt = payload.get("receipt") if isinstance(payload.get("receipt"), dict) else {}
     validation = (
-        payload.get("validation")
-        if isinstance(payload.get("validation"), dict)
-        else {}
+        payload.get("validation") if isinstance(payload.get("validation"), dict) else {}
     )
     return "\n".join(
         [
@@ -288,10 +295,8 @@ def handle_turn_command(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
         )
-        operator_inbox_urgency_projector = (
-            build_lark_operator_inbox_urgency_projector(
-                runtime_root_arg=runtime_root,
-            )
+        operator_inbox_urgency_projector = build_lark_operator_inbox_urgency_projector(
+            runtime_root_arg=runtime_root,
         )
         status_payload = collect_status(
             registry_path=registry_path,
@@ -344,7 +349,11 @@ def handle_turn_command(
             decision,
             scheduler_execution_context=scheduler_context,
         )
-        if args.turn_command == "run-once" and args.host == "codex-cli" and not supplied_resume_fields:
+        if (
+            args.turn_command == "run-once"
+            and args.host == "codex-cli"
+            and not supplied_resume_fields
+        ):
             session_binding = codex_cli_session_binding(runtime_root, turn_envelope)
         payload = build_loopx_turn_plan(
             turn_envelope,
@@ -386,7 +395,9 @@ def handle_turn_command(
                         "LoopX Turn resume journal belongs to another agent"
                     )
             project = Path(args.project).expanduser().resolve()
-            planned_host = payload.get("host") if isinstance(payload.get("host"), dict) else {}
+            planned_host = (
+                payload.get("host") if isinstance(payload.get("host"), dict) else {}
+            )
             if planned_host.get("kind") != args.host:
                 raise ValueError("--host must match the journaled LoopX Turn plan")
             if args.host == "generic-cli":
@@ -422,9 +433,21 @@ def handle_turn_command(
                 )
             else:
                 task_validator = None
-            envelope = payload.get("turn_envelope") if isinstance(payload.get("turn_envelope"), dict) else {}
-            action = envelope.get("action") if isinstance(envelope.get("action"), dict) else {}
-            selected_todo = action.get("selected_todo") if isinstance(action.get("selected_todo"), dict) else {}
+            envelope = (
+                payload.get("turn_envelope")
+                if isinstance(payload.get("turn_envelope"), dict)
+                else {}
+            )
+            action = (
+                envelope.get("action")
+                if isinstance(envelope.get("action"), dict)
+                else {}
+            )
+            selected_todo = (
+                action.get("selected_todo")
+                if isinstance(action.get("selected_todo"), dict)
+                else {}
+            )
 
             def writeback(result: dict[str, object]) -> dict[str, object]:
                 # The host workspace is execution context, not state authority.
@@ -433,7 +456,9 @@ def handle_turn_command(
                 if result_kind in {"repair_required", "replan_required"}:
                     todo_id = str(selected_todo.get("todo_id") or "")
                     if not todo_id:
-                        raise ValueError(f"{result_kind} requires one selected todo for typed writeback")
+                        raise ValueError(
+                            f"{result_kind} requires one selected todo for typed writeback"
+                        )
                     update_goal_todo(
                         registry_path=registry_path,
                         goal_id=args.goal_id,
@@ -481,6 +506,41 @@ def handle_turn_command(
                     available_capabilities=args.available_capabilities,
                 )
 
+            def observe_revision() -> str:
+                turn_scheduler_context = (
+                    payload.get("scheduler_execution_context")
+                    if isinstance(payload.get("scheduler_execution_context"), dict)
+                    else None
+                )
+                latest = build_live_quota_should_run_decision(
+                    current_status(),
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available_capabilities=args.available_capabilities,
+                    include_scheduler_detail=False,
+                    codex_app_current_rrule=None,
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    route_source="loopx_turn_plan",
+                    scheduler_execution_context=turn_scheduler_context,
+                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+                )
+                latest_envelope = build_turn_envelope(
+                    latest,
+                    scheduler_execution_context=turn_scheduler_context,
+                )
+                signature = (
+                    latest_envelope.get("action_signature")
+                    if isinstance(latest_envelope.get("action_signature"), dict)
+                    else {}
+                )
+                revision = str(signature.get("source_decision_hash") or "")
+                if not revision:
+                    raise ValueError(
+                        "mechanical reconciliation could not observe an action revision"
+                    )
+                return revision
+
             def spend() -> dict[str, object]:
                 return spend_quota_slot(
                     current_status(),
@@ -512,17 +572,26 @@ def handle_turn_command(
                     scheduler_execution_context=turn_scheduler_context,
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                 )
-                hint = latest.get("scheduler_hint") if isinstance(latest.get("scheduler_hint"), dict) else {}
+                hint = (
+                    latest.get("scheduler_hint")
+                    if isinstance(latest.get("scheduler_hint"), dict)
+                    else {}
+                )
                 phase = hint.get("execution_phase")
-                return dict(phase) if isinstance(phase, dict) else {
-                    "disposition": "contract_error",
-                    "completed": False,
-                    "acknowledged": False,
-                    "apply_needed": False,
-                }
+                return (
+                    dict(phase)
+                    if isinstance(phase, dict)
+                    else {
+                        "disposition": "contract_error",
+                        "completed": False,
+                        "acknowledged": False,
+                        "apply_needed": False,
+                    }
+                )
 
             host_runner = None
             if args.host == "codex-cli":
+
                 def run_built_in_host(request: dict[str, object]) -> dict[str, object]:
                     return run_codex_cli_host(
                         request,
@@ -550,6 +619,12 @@ def handle_turn_command(
                 writeback=writeback if args.execute else None,
                 spend=spend if args.execute else None,
                 scheduler=scheduler if args.execute else None,
+                reconciliation_mode=args.reconciliation_mode,
+                observe_revision=(
+                    observe_revision
+                    if args.execute and args.reconciliation_mode == "enforce"
+                    else None
+                ),
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")
