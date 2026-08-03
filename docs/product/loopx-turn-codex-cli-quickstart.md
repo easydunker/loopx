@@ -46,6 +46,13 @@ path. A different Agent CLI uses the same Turn contract through a thin
 `generic-cli` adapter that reads one JSON request from stdin and writes one JSON
 result to stdout.
 
+For the opt-in hardened path, add `--codex-hardened-host`. This switches the
+built-in provider to enforce reconciliation with semantic escalation and emits
+capability observations only from the selected Codex sandbox policy. A
+`read-only` session cannot attest `filesystem_write`; use `workspace-write`
+only when the LoopX boundary already authorizes that capability. Resumed
+sessions must keep the sandbox policy with which they were created.
+
 ## Read The Result
 
 The compact JSON result tells the caller what happens next:

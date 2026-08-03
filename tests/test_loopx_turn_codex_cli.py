@@ -10,11 +10,13 @@ import pytest
 
 from loopx.control_plane.turn_driver.codex_cli import (
     CODEX_CLI_SESSION_SCHEMA_VERSION,
+    codex_cli_capability_observations,
     codex_cli_result_schema,
     codex_cli_session_binding,
     load_codex_cli_session,
     run_codex_cli_host,
 )
+from loopx.control_plane.turn_driver.executor import BuiltInHostError
 
 
 def _request(
@@ -156,6 +158,15 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
         turn_key="sha256:" + "b" * 64,
         session_action="resume",
     )
+    with pytest.raises(BuiltInHostError, match="session_policy_mismatch"):
+        run_codex_cli_host(
+            second_request,
+            runtime_root=runtime_root,
+            project=project,
+            codex_bin=str(executable),
+            sandbox="workspace-write",
+            timeout_seconds=5,
+        )
     second = run_codex_cli_host(
         second_request,
         runtime_root=runtime_root,
@@ -192,6 +203,7 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
         "agent_id",
         "todo_id",
         "host",
+        "sandbox",
         "session_id",
     }
     session_paths = list(runtime_root.glob("goals/*/turn-sessions/*.json"))
@@ -200,6 +212,29 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
     persisted = session_paths[0].read_text(encoding="utf-8")
     assert "raw_trajectory" not in persisted
     assert "private_material" not in persisted
+
+
+def test_codex_cli_capability_observations_follow_sandbox_policy() -> None:
+    envelope = {
+        "boundary": {
+            "capability_gate": {
+                "required_capabilities": ["filesystem_write", "shell"]
+            }
+        }
+    }
+
+    observations = codex_cli_capability_observations(
+        envelope,
+        sandbox="workspace-write",
+    )
+
+    assert [item["capability"] for item in observations] == [
+        "filesystem_write",
+        "shell",
+    ]
+    assert all(item["provider_id"] == "managed-codex-host" for item in observations)
+    with pytest.raises(ValueError, match="filesystem_write"):
+        codex_cli_capability_observations(envelope, sandbox="read-only")
 
 
 def test_codex_cli_host_ignores_legacy_session_eligibility(

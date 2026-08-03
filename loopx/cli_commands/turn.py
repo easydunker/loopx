@@ -18,6 +18,7 @@ from ..control_plane.turn_driver import (
     LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
     build_loopx_turn_command_validator,
     build_loopx_turn_plan,
+    codex_cli_capability_observations,
     codex_cli_session_binding,
     load_loopx_turn_plan_from_journal,
     run_codex_cli_host,
@@ -143,6 +144,14 @@ def register_turn_commands(
         choices=["read-only", "workspace-write"],
         default="read-only",
         help="Sandbox for a new Codex CLI session; resume preserves its original session policy.",
+    )
+    run_once.add_argument(
+        "--codex-hardened-host",
+        action="store_true",
+        help=(
+            "Opt in the built-in Codex host to enforce reconciliation, semantic "
+            "escalation, and sandbox-derived capability attestations."
+        ),
     )
     run_once.add_argument("--timeout-seconds", type=float, default=120.0)
     run_once.add_argument(
@@ -463,6 +472,21 @@ def handle_turn_command(
                 if isinstance(payload.get("turn_envelope"), dict)
                 else {}
             )
+            reconciliation_mode = args.reconciliation_mode
+            semantic_escalation = bool(args.semantic_escalation)
+            if args.codex_hardened_host:
+                if args.host != "codex-cli":
+                    raise ValueError("--codex-hardened-host requires --host codex-cli")
+                if capability_observations:
+                    raise ValueError(
+                        "--codex-hardened-host does not accept manual capability attestations"
+                    )
+                reconciliation_mode = "enforce"
+                semantic_escalation = True
+                capability_observations = codex_cli_capability_observations(
+                    envelope,
+                    sandbox=args.codex_sandbox,
+                )
             action = (
                 envelope.get("action")
                 if isinstance(envelope.get("action"), dict)
@@ -644,13 +668,13 @@ def handle_turn_command(
                 writeback=writeback if args.execute else None,
                 spend=spend if args.execute else None,
                 scheduler=scheduler if args.execute else None,
-                reconciliation_mode=args.reconciliation_mode,
+                reconciliation_mode=reconciliation_mode,
                 observe_revision=(
                     observe_revision
-                    if args.execute and args.reconciliation_mode == "enforce"
+                    if reconciliation_mode == "enforce"
                     else None
                 ),
-                semantic_escalation=args.semantic_escalation,
+                semantic_escalation=semantic_escalation,
                 capability_observations=capability_observations,
             )
         else:

@@ -1077,3 +1077,41 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert "Run one revised public fixture check" in state
     if result_kind != "validated_progress":
         assert f"LoopX%20Turn%20{result_kind}" in state
+
+
+def test_turn_run_once_codex_hardened_host_preview_enables_enforcement(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry = _write_live_fixture(tmp_path)
+    output = io.StringIO()
+
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "--registry",
+                str(registry),
+                "--runtime-root",
+                str(runtime),
+                "--format",
+                "json",
+                "turn",
+                "run-once",
+                "--goal-id",
+                "loopx-turn-fixture",
+                "--agent-id",
+                "codex-fixture",
+                "--host",
+                "codex-cli",
+                "--project",
+                str(project),
+                "--codex-hardened-host",
+                "--scan-root",
+                str(project),
+            ]
+        )
+
+    payload = json.loads(output.getvalue())
+    assert exit_code == 0, payload
+    assert payload["status"] == "preview"
+    assert payload["reconciliation_mode"] == "enforce"
+    assert not any(payload["effects"].values())
