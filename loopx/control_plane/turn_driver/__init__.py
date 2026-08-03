@@ -9,6 +9,7 @@ from .capability_attestations import (
 )
 from .codex_cli import (
     CODEX_CLI_SESSION_SCHEMA_VERSION,
+    codex_cli_capability_observations,
     codex_cli_result_schema,
     codex_cli_session_binding,
     codex_cli_session_id_from_jsonl,
@@ -84,6 +85,7 @@ __all__ = [
     "build_turn_result_record",
     "build_turn_semantic_review_request",
     "build_turn_shadow_reconciliation_receipt",
+    "codex_cli_capability_observations",
     "codex_cli_result_schema",
     "codex_cli_session_binding",
     "codex_cli_session_id_from_jsonl",

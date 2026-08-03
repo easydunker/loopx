@@ -24,7 +24,8 @@ from .executor import (
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
 
-CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
+CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v2"
+CODEX_CLI_HOST_POLICY_SCHEMA_VERSION = "loopx_codex_cli_host_policy_v0"
 CODEX_CLI_RESULT_KINDS = (
     "validated_progress",
     "repair_required",
@@ -132,6 +133,7 @@ def _store_codex_cli_session(
     *,
     lineage: Mapping[str, str],
     session_id: str,
+    sandbox: str,
 ) -> None:
     normalized_session_id = _valid_session_id(session_id)
     if not normalized_session_id:
@@ -150,6 +152,7 @@ def _store_codex_cli_session(
                     "schema_version": CODEX_CLI_SESSION_SCHEMA_VERSION,
                     **lineage,
                     "host": "codex-cli",
+                    "sandbox": sandbox,
                     "session_id": normalized_session_id,
                 },
                 handle,
@@ -239,6 +242,61 @@ def codex_cli_result_schema() -> dict[str, Any]:
         "required": list(properties),
         "additionalProperties": False,
     }
+
+
+def codex_cli_capability_observations(
+    turn_envelope: Mapping[str, Any],
+    *,
+    sandbox: str,
+) -> list[dict[str, str]]:
+    """Attest only capabilities proven by the selected built-in host policy."""
+
+    if sandbox not in CODEX_CLI_SANDBOXES:
+        raise ValueError("Codex CLI sandbox must be read-only or workspace-write")
+    boundary = _mapping(turn_envelope.get("boundary"))
+    gate = _mapping(boundary.get("capability_gate"))
+    required = sorted(
+        {
+            str(value).strip()
+            for value in gate.get("required_capabilities", []) or []
+            if str(value).strip()
+        }
+    )
+    supported = {"shell"}
+    if sandbox == "workspace-write":
+        supported.add("filesystem_write")
+    unsupported = sorted(set(required) - supported)
+    if unsupported:
+        raise ValueError(
+            "Codex CLI host policy cannot attest required capabilities: "
+            + ", ".join(unsupported)
+        )
+    observations: list[dict[str, str]] = []
+    for capability in required:
+        policy = {
+            "schema_version": CODEX_CLI_HOST_POLICY_SCHEMA_VERSION,
+            "host": "codex-cli",
+            "sandbox": sandbox,
+            "capability": capability,
+        }
+        digest = hashlib.sha256(
+            json.dumps(
+                policy,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        observations.append(
+            {
+                "schema_version": "turn_capability_observation_v0",
+                "capability": capability,
+                "provider_id": "managed-codex-host",
+                "verification_kind": "host-policy-readback",
+                "evidence_ref": f"sha256:{digest}",
+            }
+        )
+    return observations
 
 
 def _prompt(request: Mapping[str, Any]) -> str:
@@ -395,6 +453,8 @@ def run_codex_cli_host(
     planned_action = str(planned_session.get("action") or "")
     if planned_action == "resume" and binding is None:
         raise RuntimeError("Codex CLI resume binding disappeared after planning")
+    if binding is not None and binding.get("sandbox") != sandbox:
+        raise BuiltInHostError("codex_cli_session_policy_mismatch")
     if planned_action == "start_new" and binding is not None:
         raise RuntimeError("Codex CLI session binding changed after planning")
     if planned_action not in {"resume", "start_new"}:
@@ -475,6 +535,7 @@ def run_codex_cli_host(
                     runtime_root,
                     lineage=lineage,
                     session_id=observed_session[0],
+                    sandbox=sandbox,
                 )
             raise BuiltInHostError("codex_cli_timeout")
         category = failure_categories[0] if failure_categories else "exit_nonzero"
@@ -486,6 +547,7 @@ def run_codex_cli_host(
                     runtime_root,
                     lineage=lineage,
                     session_id=observed_session[0],
+                    sandbox=sandbox,
                 )
         if returncode != 0:
             raise BuiltInHostError(f"codex_cli_{category}")
