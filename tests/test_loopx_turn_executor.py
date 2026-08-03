@@ -810,6 +810,25 @@ def test_run_once_escalates_only_pre_effect_revision_ambiguity(tmp_path: Path) -
         TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
     ) == 1
 
+    rolled_back = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: _host_result(plan),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback,
+        spend=spend,
+        scheduler=scheduler,
+        reconciliation_mode="shadow",
+    )
+
+    assert rolled_back["status"] == "committed"
+    assert rolled_back["semantic_review_request"] is None
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
 
 def test_semantic_escalation_requires_enforce_mode(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="requires enforce"):

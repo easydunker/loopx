@@ -1566,6 +1566,7 @@ def run_loopx_turn_once(
         ):
             journal.pop("reason", None)
             journal.pop("receipt", None)
+            journal.pop("semantic_review_request", None)
             journal["status"] = "in_progress"
             journal["reconciliation_mode"] = "shadow"
             _write_journal(journal_path, journal)
@@ -1581,6 +1582,7 @@ def run_loopx_turn_once(
                     journal.pop("result_record", None)
                     journal.pop("reconciliation_receipt", None)
                 journal.pop("result_kind", None)
+                journal.pop("semantic_review_request", None)
                 journal["completed_phases"] = (
                     list(TRANSACTION_PHASES[:2])
                     if isinstance(journal.get("host_result"), dict)
