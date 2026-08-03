@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,6 @@ from loopx.control_plane.scheduler.execution_context import (
 from loopx.control_plane.work_items.interaction_contract import (
     build_protocol_action_packet,
 )
-
 
 STATE_MATRIX = json.loads(
     (Path(__file__).parent / "fixtures" / "turn_envelope_state_matrix.json").read_text(
@@ -191,6 +190,66 @@ def _full_decision() -> dict[str, object]:
     }
     source["protocol_action_packet"] = build_protocol_action_packet(source)
     return source
+
+
+def test_turn_envelope_projects_promotion_capability_and_write_authority() -> None:
+    source = _full_decision()
+    source["selected_todo"]["required_write_scopes"] = ["loopx/control_plane/**"]
+    source["capability_gate"] = {
+        "action": "run",
+        "required": ["filesystem_write", "shell"],
+        "available": ["filesystem_read", "filesystem_write", "shell"],
+        "missing": [],
+        "reason": "required capabilities are available",
+    }
+    source["goal_boundary"] = {"write_scope": ["loopx/**"]}
+
+    envelope = build_turn_envelope(source)
+
+    assert envelope["action"]["selected_todo"]["required_write_scopes"] == [
+        "loopx/control_plane/**"
+    ]
+    assert envelope["boundary"]["write_scope"] == ["loopx/**"]
+    assert envelope["boundary"]["capability_gate"] == {
+        "action": "run",
+        "reason": "required capabilities are available",
+        "required_capabilities": ["filesystem_write", "shell"],
+        "available_capabilities": [
+            "filesystem_read",
+            "filesystem_write",
+            "shell",
+        ],
+        "missing_capabilities": [],
+    }
+    assert envelope["action_signature"]["matches"] is True
+
+
+def test_turn_envelope_rejects_capability_lists_that_cannot_be_projected_whole() -> None:
+    source = _full_decision()
+    capabilities = [f"capability_{index}" for index in range(33)]
+    source["capability_gate"] = {
+        "action": "run",
+        "required": capabilities,
+        "available": capabilities,
+        "missing": [],
+    }
+
+    with pytest.raises(ValueError, match="required_capabilities exceeds the 32-item"):
+        build_turn_envelope(source)
+
+
+def test_turn_envelope_keeps_explicit_empty_capability_gate_compact() -> None:
+    source = _full_decision()
+    source["capability_gate"] = {
+        "action": "run",
+        "required": [],
+        "available": [],
+        "missing": [],
+    }
+
+    envelope = build_turn_envelope(source)
+
+    assert envelope["boundary"]["capability_gate"] == {"action": "run"}
 
 
 @pytest.mark.parametrize(

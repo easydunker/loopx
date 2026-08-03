@@ -207,11 +207,13 @@ def build_capability_gate_with_monitor_fallback(
     available_capabilities: list[str],
     agent_identity: dict[str, Any] | None = None,
     monitor_item_limit: int = DEFAULT_MONITOR_ITEM_LIMIT,
+    emit_empty_run_gate: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
     capability_gate = build_capability_gate(
         agent_todo_summary,
         available_capabilities=available_capabilities,
         agent_identity=agent_identity,
+        emit_empty_run_gate=emit_empty_run_gate,
     )
     contract, fallback = build_capability_skip_monitor_fallback_contract(
         capability_gate,

@@ -5,6 +5,14 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
+from ..control_plane.quota.turn_envelope import build_turn_envelope
+from ..control_plane.runtime.status_projection_cache import (
+    resolve_status_projection_cache_runtime_root,
+)
+from ..control_plane.scheduler.execution_context import (
+    scheduler_execution_context_for_turn,
+)
 from ..control_plane.turn_driver import (
     LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
     LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
@@ -15,20 +23,11 @@ from ..control_plane.turn_driver import (
     run_codex_cli_host,
     run_loopx_turn_once,
 )
-from ..control_plane.scheduler.execution_context import (
-    scheduler_execution_context_for_turn,
-)
-from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
-from ..control_plane.quota.turn_envelope import build_turn_envelope
-from ..control_plane.runtime.status_projection_cache import (
-    resolve_status_projection_cache_runtime_root,
-)
 from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from ..todos import update_goal_todo
 from .lark_inbox import build_lark_operator_inbox_urgency_projector
-
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -166,6 +165,16 @@ def register_turn_commands(
         help=(
             "When enforce mode detects a changed revision before effects, append "
             "a bounded semantic review request without applying any effect."
+        ),
+    )
+    run_once.add_argument(
+        "--capability-attestation-json",
+        dest="capability_observation_jsons",
+        action="append",
+        default=[],
+        help=(
+            "Public-safe turn_capability_observation_v0 JSON object proving one "
+            "required capability. Repeat once per capability in enforce mode."
         ),
     )
     run_once.add_argument(
@@ -441,6 +450,14 @@ def handle_turn_command(
                 )
             else:
                 task_validator = None
+            capability_observations: list[dict[str, object]] = []
+            for raw_observation in args.capability_observation_jsons:
+                observation = json.loads(raw_observation)
+                if not isinstance(observation, dict):
+                    raise TypeError(
+                        "--capability-attestation-json must be one JSON object"
+                    )
+                capability_observations.append(observation)
             envelope = (
                 payload.get("turn_envelope")
                 if isinstance(payload.get("turn_envelope"), dict)
@@ -634,6 +651,7 @@ def handle_turn_command(
                     else None
                 ),
                 semantic_escalation=args.semantic_escalation,
+                capability_observations=capability_observations,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")
