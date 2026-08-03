@@ -253,9 +253,10 @@ validated result and reconciliation observations:
 | Operator rolls back a blocked enforced Turn | The same journal resumes in `shadow` mode; the conflict receipt remains immutable evidence. |
 
 The journal remains a mutable transaction checkpoint. The ledger validates
-every row before append, rejects dangling receipts and duplicate identities,
-and reuses byte-equivalent record ids on replay. A later shadow receipt never
-replaces the initial receipt or an earlier partial-path shadow observation.
+every row before append, rejects dangling linked rows, semantic-request lineage
+mismatches, and duplicate identities, and reuses byte-equivalent record ids on
+replay. A later shadow receipt never replaces the initial receipt or an earlier
+partial-path shadow observation.
 
 ## Promotion Sequence
 

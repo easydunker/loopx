@@ -48,6 +48,25 @@ def _record_identity(value: Mapping[str, Any]) -> tuple[str, str]:
     return schema_version, identity
 
 
+def _validate_semantic_request_lineage(
+    request: Mapping[str, Any],
+    result_record: Mapping[str, Any],
+) -> None:
+    proposed_effect_ids = [
+        str(effect.get("effect_id") or "")
+        for effect in result_record.get("proposed_effects") or []
+        if isinstance(effect, Mapping)
+    ]
+    if (
+        request.get("turn_key") != result_record.get("turn_key")
+        or request.get("expected_revision") != result_record.get("based_on_revision")
+        or request.get("proposed_effect_ids") != proposed_effect_ids
+    ):
+        raise ValueError(
+            "Turn semantic review request does not match its result record"
+        )
+
+
 def _complete_ledger_text(path: Path) -> tuple[str, int]:
     """Return newline-committed ledger text and its durable byte boundary."""
 
@@ -71,7 +90,7 @@ def read_turn_result_ledger(path: Path) -> list[dict[str, Any]]:
     text, _complete_size = _complete_ledger_text(path)
     rows: list[dict[str, Any]] = []
     identities: dict[tuple[str, str], dict[str, Any]] = {}
-    result_record_ids: set[str] = set()
+    result_records: dict[str, dict[str, Any]] = {}
     receipts: list[dict[str, Any]] = []
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         if not raw_line.strip():
@@ -93,19 +112,24 @@ def read_turn_result_ledger(path: Path) -> list[dict[str, Any]]:
             raise ValueError("Turn result ledger contains a duplicate immutable row")
         identities[key] = row
         if key[0] == TURN_RESULT_RECORD_SCHEMA_VERSION:
-            result_record_ids.add(key[1])
+            result_records[key[1]] = row
         else:
             receipts.append(row)
         rows.append(row)
     for receipt in receipts:
-        if str(receipt.get("result_record_id") or "") in result_record_ids:
-            continue
+        result_record = result_records.get(str(receipt.get("result_record_id") or ""))
+        if result_record is None:
+            if (
+                receipt.get("schema_version")
+                == TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION
+            ):
+                raise ValueError("Turn result ledger receipt has no result record")
+            raise ValueError("Turn semantic review request has no result record")
         if (
             receipt.get("schema_version")
-            == TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION
+            == TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
         ):
-            raise ValueError("Turn result ledger receipt has no result record")
-        raise ValueError("Turn semantic review request has no result record")
+            _validate_semantic_request_lineage(receipt, result_record)
     return rows
 
 
@@ -143,27 +167,38 @@ def append_turn_result_ledger_records(
                     os.close(descriptor)
         existing = read_turn_result_ledger(path)
         existing_by_key = {_record_identity(row): row for row in existing}
-        known_result_ids = {
-            identity
-            for (schema_version, identity) in (
-                set(existing_by_key) | set(candidate_by_key)
-            )
+        all_rows_by_key = {**existing_by_key, **candidate_by_key}
+        known_result_records = {
+            identity: row
+            for (schema_version, identity), row in all_rows_by_key.items()
             if schema_version == TURN_RESULT_RECORD_SCHEMA_VERSION
         }
         if any(
-            str(candidate.get("result_record_id") or "") not in known_result_ids
+            str(candidate.get("result_record_id") or "")
+            not in known_result_records
             for candidate in candidates
             if candidate.get("schema_version")
             == TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION
         ):
             raise ValueError("Turn result ledger receipt has no result record")
         if any(
-            str(candidate.get("result_record_id") or "") not in known_result_ids
+            str(candidate.get("result_record_id") or "")
+            not in known_result_records
             for candidate in candidates
             if candidate.get("schema_version")
             == TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
         ):
             raise ValueError("Turn semantic review request has no result record")
+        for candidate in candidates:
+            if (
+                candidate.get("schema_version")
+                != TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
+            ):
+                continue
+            result_record = known_result_records[
+                str(candidate.get("result_record_id") or "")
+            ]
+            _validate_semantic_request_lineage(candidate, result_record)
 
         appended: list[tuple[str, str]] = []
         reused: list[tuple[str, str]] = []

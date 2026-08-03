@@ -307,6 +307,28 @@ def test_result_ledger_rejects_dangling_or_corrupt_rows(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == "{not-json}\n"
 
 
+def test_result_ledger_rejects_semantic_request_with_mismatched_lineage(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    record = build_turn_result_record(plan, _host_result(plan))
+    request = build_turn_semantic_review_request(
+        record,
+        ambiguity_kind="revision_changed_before_effects",
+        observed_revision="sha256:advanced",
+    )
+    request["turn_key"] = "sha256:other-turn"
+    request["request_id"] = _content_hash(
+        {key: value for key, value in request.items() if key != "request_id"}
+    )
+    path = tmp_path / "turn-result-ledger.jsonl"
+
+    with pytest.raises(ValueError, match="does not match its result record"):
+        append_turn_result_ledger_records(path, [record, request])
+
+    assert not path.exists()
+
+
 def test_result_ledger_recovers_one_torn_trailing_row(tmp_path: Path) -> None:
     plan = _plan()
     record = build_turn_result_record(plan, _host_result(plan))
