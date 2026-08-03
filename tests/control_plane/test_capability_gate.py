@@ -192,6 +192,15 @@ def test_requirement_free_candidate_emits_explicit_empty_run_gate() -> None:
     assert set(gate) == {"action"}
 
 
+def test_requirement_free_candidate_keeps_empty_gate_opted_out_by_default() -> None:
+    gate = build_capability_gate(
+        {"executable_backlog_items": [_todo("todo_plain", index=1)]},
+        available_capabilities=[],
+    )
+
+    assert gate is None
+
+
 def test_enforce_eligible_decision_can_emit_explicit_empty_run_gate() -> None:
     gate = build_capability_gate(
         None,

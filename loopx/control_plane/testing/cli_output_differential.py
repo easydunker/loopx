@@ -27,6 +27,8 @@ class GrowthAllowance:
 _GROWTH_ALLOWANCE_BY_POLICY: dict[str, GrowthAllowance] = {
     "absolute_hot_path": GrowthAllowance(
         ratio=0.005,
+        # The explicit capability gate is projected by both quota should-run and
+        # loopx turn plan, so each absolute hot-path JSON surface needs 3 lines.
         json={"chars": 64, "utf8_bytes": 128, "lines": 3, "compact_payload_chars": 64},
         markdown={
             "chars": 32,

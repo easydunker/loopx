@@ -391,6 +391,23 @@ def test_enforce_replay_validates_attestation_against_committed_plan(
     )
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
 
+    journal_path = next(
+        (tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob("*.json")
+    )
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    journal["plan"]["turn_envelope"]["boundary"]["write_scope"] = [
+        "docs/**",
+        "loopx/**",
+    ]
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="promotion attestation has invalid lineage",
+    ):
+        run_loopx_turn_once(plan, **kwargs)
+    assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
 
 def test_semantic_review_request_is_bounded_to_changed_pre_effect_revision() -> None:
     plan = _plan()
