@@ -12,8 +12,10 @@ from ...file_lock import exclusive_file_lock
 from .result_records import (
     TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,
     TURN_RESULT_RECORD_SCHEMA_VERSION,
+    TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION,
     validate_turn_reconciliation_receipt,
     validate_turn_result_record,
+    validate_turn_semantic_review_request,
 )
 
 
@@ -36,6 +38,9 @@ def _record_identity(value: Mapping[str, Any]) -> tuple[str, str]:
     elif schema_version == TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION:
         validation = validate_turn_reconciliation_receipt(value)
         identity = str(value.get("receipt_id") or "")
+    elif schema_version == TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION:
+        validation = validate_turn_semantic_review_request(value)
+        identity = str(value.get("request_id") or "")
     else:
         raise ValueError("Turn result ledger row has an unsupported schema")
     if not validation["ok"]:
@@ -92,11 +97,15 @@ def read_turn_result_ledger(path: Path) -> list[dict[str, Any]]:
         else:
             receipts.append(row)
         rows.append(row)
-    if any(
-        str(receipt.get("result_record_id") or "") not in result_record_ids
-        for receipt in receipts
-    ):
-        raise ValueError("Turn result ledger receipt has no result record")
+    for receipt in receipts:
+        if str(receipt.get("result_record_id") or "") in result_record_ids:
+            continue
+        if (
+            receipt.get("schema_version")
+            == TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION
+        ):
+            raise ValueError("Turn result ledger receipt has no result record")
+        raise ValueError("Turn semantic review request has no result record")
     return rows
 
 
@@ -148,6 +157,13 @@ def append_turn_result_ledger_records(
             == TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION
         ):
             raise ValueError("Turn result ledger receipt has no result record")
+        if any(
+            str(candidate.get("result_record_id") or "") not in known_result_ids
+            for candidate in candidates
+            if candidate.get("schema_version")
+            == TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
+        ):
+            raise ValueError("Turn semantic review request has no result record")
 
         appended: list[tuple[str, str]] = []
         reused: list[tuple[str, str]] = []

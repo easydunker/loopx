@@ -12,6 +12,8 @@ from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, LoopXTurnResultKind
 
 TURN_RESULT_RECORD_SCHEMA_VERSION = "turn_result_record_v0"
 TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION = "turn_reconciliation_receipt_v0"
+TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION = "turn_semantic_review_request_v0"
+TURN_SEMANTIC_AMBIGUITY_KINDS = {"revision_changed_before_effects"}
 TURN_RECONCILIATION_STATUSES = {
     "not_attempted",
     "not_required",
@@ -45,6 +47,16 @@ TURN_RECONCILIATION_RECEIPT_FIELDS = {
     "proposed_effect_ids",
     "applied_effect_ids",
     "reason",
+}
+TURN_SEMANTIC_REVIEW_REQUEST_FIELDS = {
+    "schema_version",
+    "request_id",
+    "result_record_id",
+    "turn_key",
+    "ambiguity_kind",
+    "expected_revision",
+    "observed_revision",
+    "proposed_effect_ids",
 }
 
 
@@ -387,6 +399,90 @@ def build_turn_shadow_reconciliation_receipt(
             else "direct_writeback_effect_sequence_differs"
         ),
     )
+
+
+def build_turn_semantic_review_request(
+    result_record: Mapping[str, Any],
+    *,
+    ambiguity_kind: str,
+    observed_revision: str,
+) -> dict[str, Any]:
+    """Build a bounded escalation request without granting effect authority."""
+
+    validation = validate_turn_result_record(result_record)
+    if not validation["ok"]:
+        raise ValueError("; ".join(validation["errors"]))
+    if ambiguity_kind not in TURN_SEMANTIC_AMBIGUITY_KINDS:
+        raise ValueError("unsupported Turn semantic ambiguity kind")
+    expected_revision = str(result_record.get("based_on_revision") or "")
+    observed = str(observed_revision or "")
+    if not observed or observed == expected_revision:
+        raise ValueError("semantic review requires a changed observed revision")
+    proposed_effect_ids = [
+        str(_mapping(item).get("effect_id") or "")
+        for item in result_record.get("proposed_effects") or []
+    ]
+    if not proposed_effect_ids:
+        raise ValueError("semantic review requires proposed effects")
+    document = {
+        "schema_version": TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION,
+        "result_record_id": result_record["record_id"],
+        "turn_key": result_record["turn_key"],
+        "ambiguity_kind": ambiguity_kind,
+        "expected_revision": expected_revision,
+        "observed_revision": observed,
+        "proposed_effect_ids": proposed_effect_ids,
+    }
+    return {**document, "request_id": _canonical_hash(document)}
+
+
+def validate_turn_semantic_review_request(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate one immutable ambiguity-only semantic escalation request."""
+
+    request = dict(value)
+    errors: list[str] = []
+    unknown = sorted(set(request) - TURN_SEMANTIC_REVIEW_REQUEST_FIELDS)
+    if unknown:
+        errors.append(
+            "unsupported Turn semantic review request fields: " + ", ".join(unknown)
+        )
+    if request.get("schema_version") != TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION:
+        errors.append("unsupported Turn semantic review request schema")
+    if request.get("ambiguity_kind") not in TURN_SEMANTIC_AMBIGUITY_KINDS:
+        errors.append("unsupported Turn semantic ambiguity kind")
+    if not all(
+        str(request.get(key) or "")
+        for key in (
+            "result_record_id",
+            "turn_key",
+            "expected_revision",
+            "observed_revision",
+        )
+    ):
+        errors.append("Turn semantic review request has incomplete lineage")
+    if request.get("expected_revision") == request.get("observed_revision"):
+        errors.append("Turn semantic review request revisions are not ambiguous")
+    proposed = request.get("proposed_effect_ids")
+    if (
+        not isinstance(proposed, list)
+        or not proposed
+        or not all(str(item) for item in proposed)
+        or len(set(str(item) for item in proposed)) != len(proposed)
+    ):
+        errors.append("Turn semantic review request requires unique proposed effects")
+    request_id = str(request.pop("request_id", "") or "")
+    if not request_id or request_id != _canonical_hash(request):
+        errors.append(
+            "Turn semantic review request_id does not match its canonical content"
+        )
+    return {
+        "ok": not errors,
+        "schema_version": TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION,
+        "request_id": request_id or None,
+        "errors": errors,
+    }
 
 
 def validate_turn_reconciliation_receipt(

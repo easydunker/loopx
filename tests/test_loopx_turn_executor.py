@@ -14,10 +14,12 @@ from loopx.control_plane.turn_driver import (
     TURN_RECONCILIATION_RECEIPT_SCHEMA_VERSION,
     TURN_RESULT_LEDGER_APPEND_SCHEMA_VERSION,
     TURN_RESULT_RECORD_SCHEMA_VERSION,
+    TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION,
     append_turn_result_ledger_records,
     build_loopx_turn_plan,
     build_turn_reconciliation_receipt,
     build_turn_result_record,
+    build_turn_semantic_review_request,
     build_turn_shadow_reconciliation_receipt,
     load_loopx_turn_plan_from_journal,
     read_turn_result_ledger,
@@ -25,6 +27,7 @@ from loopx.control_plane.turn_driver import (
     validate_loopx_turn_host_result,
     validate_turn_reconciliation_receipt,
     validate_turn_result_record,
+    validate_turn_semantic_review_request,
 )
 from loopx.control_plane.turn_driver.executor import BuiltInHostError, _run_host_runner
 
@@ -192,7 +195,6 @@ def test_result_and_reconciliation_records_have_stable_content_identity() -> Non
     assert receipt["status"] == "not_attempted"
     assert receipt["applied_effect_ids"] == []
     assert validate_turn_reconciliation_receipt(receipt)["ok"] is True
-
     tampered = dict(record)
     tampered["result_kind"] = "wait"
     assert validate_turn_result_record(tampered)["ok"] is False
@@ -224,6 +226,36 @@ def test_result_and_reconciliation_records_have_stable_content_identity() -> Non
             record,
             status="applied",
             applied_effect_ids=[effect_id, effect_id],
+        )
+
+
+def test_semantic_review_request_is_bounded_to_changed_pre_effect_revision() -> None:
+    plan = _plan()
+    record = build_turn_result_record(plan, _host_result(plan))
+
+    request = build_turn_semantic_review_request(
+        record,
+        ambiguity_kind="revision_changed_before_effects",
+        observed_revision="sha256:advanced",
+    )
+    replay = build_turn_semantic_review_request(
+        record,
+        ambiguity_kind="revision_changed_before_effects",
+        observed_revision="sha256:advanced",
+    )
+
+    assert request == replay
+    assert request["schema_version"] == TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
+    assert request["result_record_id"] == record["record_id"]
+    assert request["proposed_effect_ids"] == [
+        effect["effect_id"] for effect in record["proposed_effects"]
+    ]
+    assert validate_turn_semantic_review_request(request)["ok"] is True
+    with pytest.raises(ValueError, match="changed observed revision"):
+        build_turn_semantic_review_request(
+            record,
+            ambiguity_kind="revision_changed_before_effects",
+            observed_revision=record["based_on_revision"],
         )
 
 
@@ -334,6 +366,7 @@ def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None
         execute=False,
         reconciliation_mode="enforce",
         observe_revision=lambda: "sha256:fixture",
+        semantic_escalation=True,
     )
 
     assert payload["ok"] is True
@@ -651,6 +684,7 @@ def test_run_once_enforces_matching_revision_and_records_applied_receipt(
     assert payload["status"] == "committed"
     assert payload["reconciliation_mode"] == "enforce"
     assert payload["shadow_reconciliation_receipt"] is None
+    assert payload["semantic_review_request"] is None
     assert payload["enforced_reconciliation_receipt"]["status"] == "applied"
     assert payload["enforced_reconciliation_receipt"]["observed_revision"] == (
         "sha256:fixture"
@@ -712,6 +746,60 @@ def test_run_once_enforcement_blocks_stale_revision_and_shadow_rolls_back(
         "revision_conflict"
     )
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_run_once_escalates_only_pre_effect_revision_ambiguity(tmp_path: Path) -> None:
+    plan = _plan()
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    blocked = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: _host_result(plan),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback,
+        spend=spend,
+        scheduler=scheduler,
+        reconciliation_mode="enforce",
+        observe_revision=lambda: "sha256:advanced",
+        semantic_escalation=True,
+    )
+
+    assert blocked["status"] == "reconciliation_blocked"
+    assert blocked["enforced_reconciliation_receipt"]["status"] == (
+        "revision_conflict"
+    )
+    assert blocked["semantic_review_request"]["ambiguity_kind"] == (
+        "revision_changed_before_effects"
+    )
+    assert blocked["semantic_review_request"]["observed_revision"] == (
+        "sha256:advanced"
+    )
+    assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
+    ledger = read_turn_result_ledger(
+        tmp_path / "runtime" / "goals" / "fixture-goal" / "turn-result-ledger.jsonl"
+    )
+    assert [row["schema_version"] for row in ledger].count(
+        TURN_SEMANTIC_REVIEW_REQUEST_SCHEMA_VERSION
+    ) == 1
+
+
+def test_semantic_escalation_requires_enforce_mode(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="requires enforce"):
+        run_loopx_turn_once(
+            _plan(),
+            project=tmp_path,
+            runtime_root=tmp_path / "runtime",
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=False,
+            semantic_escalation=True,
+        )
 
 
 def test_run_once_enforcement_resume_reuses_checked_revision(
